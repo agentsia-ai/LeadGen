@@ -1,0 +1,125 @@
+# ============================================================
+# LeadGen / Legion — Client Configuration Template
+# Copy to config.yaml and customize for your use case
+# ============================================================
+
+# --- Identity ---
+client_name: "Your Business Name"
+operator_name: "Your Name"
+operator_title: "AI Solutions Consultant"
+operator_email: "you@yourdomain.com"
+
+# --- Ideal Customer Profile (ICP) ---
+icp:
+  # Industries to target (use plain English)
+  industries:
+    - "restaurants and food service"
+    - "retail"
+    - "professional services"
+    - "healthcare clinics"
+
+  # Company size range
+  company_size:
+    min_employees: 5
+    max_employees: 200
+
+  # Revenue range (optional, in USD)
+  annual_revenue:
+    min: 500000
+    max: 10000000
+
+  # Geographic focus
+  geography:
+    countries: ["US"]
+    states: []          # leave empty for all states
+    cities: []          # leave empty for all cities
+
+  # Pain points your solution addresses
+  pain_points:
+    - "manual repetitive tasks"
+    - "customer communication"
+    - "scheduling and operations"
+    - "data analysis and reporting"
+
+  # Keywords that indicate a good fit
+  positive_signals:
+    - "looking to scale"
+    - "hiring operations manager"
+    - "digital transformation"
+
+  # Keywords that indicate a bad fit
+  negative_signals:
+    - "enterprise software"
+    - "fortune 500"
+    - "government"
+
+# --- Value Proposition ---
+value_prop:
+  headline: "AI automation for small businesses — without the enterprise price tag"
+  one_liner: >
+    We help small businesses save 10+ hours a week by automating their most
+    repetitive tasks using AI — implemented in days, not months.
+  proof_points:
+    - "Typical client saves 10-15 hours/week within 30 days"
+    - "No long-term contracts, month-to-month"
+    - "We handle setup and training"
+
+# --- Outreach Settings ---
+outreach:
+  # Email tone: formal | friendly-professional | casual
+  tone: "friendly-professional"
+
+  # Max emails per day (keep low to avoid spam flags)
+  daily_email_limit: 30
+
+  # Follow-up sequence timing (days after initial)
+  follow_up_days: [3, 7, 14]
+
+  # Max follow-ups per lead before marking cold
+  max_follow_ups: 3
+
+  # Require human approval before sending?
+  require_approval: true
+
+  # Email signature (optional HTML)
+  signature: |
+    Best,
+    {operator_name}
+    {operator_title}
+    {operator_email}
+
+# --- Lead Sources ---
+sources:
+  apollo:
+    enabled: true
+    results_per_search: 50
+
+  hunter:
+    enabled: true
+    verify_emails: true
+
+  web_crawl:
+    enabled: false
+    allowed_domains: []   # restrict crawling to specific domains
+
+  csv_import:
+    enabled: true
+    watch_folder: "./imports"   # auto-import CSVs dropped here
+
+# --- Scoring Weights ---
+# How much each factor matters for lead score (must sum to 1.0)
+scoring:
+  industry_match: 0.30
+  company_size_match: 0.20
+  geography_match: 0.15
+  pain_point_signals: 0.25
+  contact_quality: 0.10
+
+# Minimum score to include in outreach queue (0.0 - 1.0)
+scoring_threshold: 0.60
+
+# --- Database ---
+database:
+  # "sqlite" for local, "supabase" for cloud
+  backend: "sqlite"
+  sqlite_path: "./data/leadgen.db"

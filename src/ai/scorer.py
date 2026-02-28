@@ -1,0 +1,155 @@
+"""
+LeadGen AI Scorer
+Uses Claude to score leads against your ICP and explain the reasoning.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from datetime import datetime
+
+import anthropic
+
+from src.config.loader import APIKeys, LeadGenConfig
+from src.models import Lead, ScoringBreakdown
+
+logger = logging.getLogger(__name__)
+
+
+SCORE_SYSTEM_PROMPT = """You are a lead qualification expert. Your job is to score a business lead 
+against an Ideal Customer Profile (ICP) and return a structured JSON score.
+
+You must respond with ONLY valid JSON — no preamble, no explanation outside the JSON.
+
+The JSON must follow this exact structure:
+{
+  "industry_match": 0.0,
+  "company_size_match": 0.0,
+  "geography_match": 0.0,
+  "pain_point_signals": 0.0,
+  "contact_quality": 0.0,
+  "total": 0.0,
+  "reasoning": "Brief explanation of the score"
+}
+
+Each numeric field is a float between 0.0 and 1.0.
+"total" should be the weighted average based on the weights provided.
+"reasoning" should be 1-3 sentences explaining why this lead is or isn't a good fit.
+"""
+
+
+class LeadScorer:
+    """Scores leads against the configured ICP using Claude."""
+
+    def __init__(self, config: LeadGenConfig, keys: APIKeys):
+        self.config = config
+        self.client = anthropic.AsyncAnthropic(api_key=keys.anthropic)
+        self.weights = config.scoring
+        self.threshold = config.scoring.threshold
+
+    def _build_score_prompt(self, lead: Lead) -> str:
+        icp = self.config.icp
+        weights = self.weights
+
+        return f"""Score this lead against the ICP below.
+
+=== IDEAL CUSTOMER PROFILE ===
+Target Industries: {', '.join(icp.industries)}
+Company Size: {icp.company_size.get('min_employees')}–{icp.company_size.get('max_employees')} employees
+Target Geography: {icp.geography}
+Pain Points We Solve: {', '.join(icp.pain_points)}
+Positive Signals: {', '.join(icp.positive_signals)}
+Negative Signals (disqualifiers): {', '.join(icp.negative_signals)}
+
+Value Proposition: {self.config.value_prop.one_liner}
+
+=== SCORING WEIGHTS ===
+industry_match: {weights.industry_match}
+company_size_match: {weights.company_size_match}
+geography_match: {weights.geography_match}
+pain_point_signals: {weights.pain_point_signals}
+contact_quality: {weights.contact_quality}
+
+=== LEAD TO SCORE ===
+Contact: {lead.display_name}
+Title: {lead.contact.title or 'Unknown'}
+Email: {'✓ verified' if lead.contact.email_verified else ('present but unverified' if lead.contact.email else 'missing')}
+LinkedIn: {'present' if lead.contact.linkedin_url else 'missing'}
+
+Company: {lead.company.name}
+Industry: {lead.company.industry or 'Unknown'}
+Employees: {lead.company.employee_count or 'Unknown'}
+Revenue: {lead.company.annual_revenue or 'Unknown'}
+Location: {lead.company.city}, {lead.company.state}, {lead.company.country}
+Description: {lead.company.description or 'No description available'}
+Technologies: {', '.join(lead.company.technologies[:10]) if lead.company.technologies else 'None listed'}
+
+Score this lead now. Return only JSON."""
+
+    async def score(self, lead: Lead) -> ScoringBreakdown:
+        """Score a single lead against the ICP."""
+        prompt = self._build_score_prompt(lead)
+
+        try:
+            response = await self.client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=500,
+                system=SCORE_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}],
+            )
+
+            raw_text = response.content[0].text.strip()
+            # Strip markdown code fences if present
+            if raw_text.startswith("```"):
+                raw_text = raw_text.split("```")[1]
+                if raw_text.startswith("json"):
+                    raw_text = raw_text[4:]
+
+            score_data = json.loads(raw_text)
+            breakdown = ScoringBreakdown(
+                **score_data,
+                scored_at=datetime.utcnow(),
+            )
+
+            logger.info(
+                f"Scored '{lead.display_name}' at {lead.company.name}: "
+                f"{breakdown.total:.2f} ({'PASS' if breakdown.total >= self.threshold else 'FAIL'})"
+            )
+            return breakdown
+
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.error(f"Failed to parse Claude scoring response: {e}")
+            # Return a zero score rather than crashing
+            return ScoringBreakdown(
+                reasoning=f"Scoring failed: {e}",
+                scored_at=datetime.utcnow(),
+            )
+
+    async def score_batch(
+        self, leads: list[Lead], min_score: float | None = None
+    ) -> list[Lead]:
+        """
+        Score a batch of leads and attach scores.
+        Optionally filter to only leads meeting min_score.
+        """
+        import asyncio
+
+        threshold = min_score if min_score is not None else self.threshold
+        scored = []
+
+        # Score concurrently in batches of 5 to avoid rate limits
+        for i in range(0, len(leads), 5):
+            batch = leads[i : i + 5]
+            results = await asyncio.gather(*[self.score(lead) for lead in batch])
+
+            for lead, score in zip(batch, results):
+                lead.score = score
+                lead.touch()
+                if score.total >= threshold:
+                    scored.append(lead)
+
+        logger.info(
+            f"Scored {len(leads)} leads — {len(scored)} passed threshold {threshold}"
+        )
+        return scored
