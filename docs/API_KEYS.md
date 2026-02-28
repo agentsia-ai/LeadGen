@@ -100,7 +100,7 @@ SMTP_FROM_NAME=Your Name
 
 **Custom domain (recommended for business):**
 Use whatever SMTP your domain host provides (Google Workspace, Zoho, etc.)
-Sending from `you@agentsia.ai` is significantly more professional and 
+Sending from `you@yourcompany.com` is significantly more professional and 
 deliverable than `you@gmail.com` for B2B cold outreach.
 
 **Gmail free tier limits:** 500 emails/day (more than enough for cold outreach)

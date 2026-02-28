@@ -131,6 +131,46 @@ def pipeline(ctx):
 
 @main.command()
 @click.pass_context
+def smtp_test(ctx):
+    """Test SMTP connection without sending any email."""
+    async def _run():
+        from leadgen.config.loader import load_config, load_api_keys
+
+        cfg = load_config(ctx.obj.get("config_path"))
+        keys = load_api_keys()
+
+        if not keys.smtp_host or not keys.smtp_username or not keys.smtp_password:
+            console.print("[red]✗[/red] SMTP not configured. Add SMTP_HOST, SMTP_USERNAME, and SMTP_PASSWORD to .env")
+            console.print("See docs/SMTP_SETUP.md for Gmail setup instructions.")
+            return
+
+        try:
+            import aiosmtplib
+
+            console.print(f"Connecting to {keys.smtp_host}:{keys.smtp_port}...")
+            smtp = aiosmtplib.SMTP(
+                hostname=keys.smtp_host,
+                port=keys.smtp_port,
+                use_tls=False,
+                start_tls=False,
+            )
+            await smtp.connect()
+            await smtp.starttls()
+            await smtp.login(keys.smtp_username, keys.smtp_password)
+            await smtp.quit()
+
+            console.print("[green]✓[/green] SMTP connection successful.")
+            console.print(f"  Host: {keys.smtp_host}:{keys.smtp_port}")
+            console.print(f"  From: {keys.smtp_from_name or 'N/A'} <{keys.smtp_from_email or keys.smtp_username}>")
+        except Exception as e:
+            console.print(f"[red]✗[/red] SMTP connection failed: {e}")
+            console.print("See docs/SMTP_SETUP.md for troubleshooting.")
+
+    asyncio.run(_run())
+
+
+@main.command()
+@click.pass_context
 def mcp(ctx):
     """Start the MCP server for Claude Desktop integration."""
     import asyncio

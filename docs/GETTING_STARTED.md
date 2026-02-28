@@ -84,7 +84,11 @@ ANTHROPIC_API_KEY=sk-ant-...
 APOLLO_API_KEY=your-apollo-key
 ```
 
-For sending emails, also add your SMTP credentials (see `docs/API_KEYS.md`).
+For sending emails, add your SMTP credentials and test the connection:
+```bash
+# After adding SMTP_* to .env (see docs/SMTP_SETUP.md for Gmail)
+leadgen smtp-test
+```
 
 ---
 
@@ -97,10 +101,10 @@ cp config.example.yaml config.yaml
 Open `config.yaml` and customize for your business. The most important sections:
 
 ```yaml
-client_name: "Artificial Intelligentsia, LLC"
+client_name: "Your Business Name"
 operator_name: "Your Name"
 operator_title: "AI Solutions Consultant"
-operator_email: "you@agentsia.ai"
+operator_email: "you@yourdomain.com"
 
 icp:
   industries:
