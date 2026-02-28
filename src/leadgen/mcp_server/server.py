@@ -75,14 +75,18 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="fetch_new_leads",
-            description="Pull fresh leads from Apollo.io matching the configured ICP.",
+            description="Pull fresh leads from Apollo.io (ICP search) or Hunter.io (domain search). Use domain for Hunter; omit for Apollo.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "limit": {
                         "type": "integer",
                         "description": "Number of leads to fetch (default 25)",
-                    }
+                    },
+                    "domain": {
+                        "type": "string",
+                        "description": "Company domain for Hunter search (e.g. acmecorp.com). When provided, uses Hunter instead of Apollo.",
+                    },
                 },
             },
         ),
@@ -205,10 +209,20 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
     elif name == "fetch_new_leads":
         from leadgen.sources.apollo import ApolloConnector
+        from leadgen.sources.hunter import HunterConnector
         limit = arguments.get("limit", 25)
+        domain = arguments.get("domain")
 
-        async with ApolloConnector(config, keys) as apollo:
-            leads = await apollo.search(limit=limit)
+        if domain:
+            if not keys.hunter:
+                return [TextContent(type="text", text=json.dumps({"error": "HUNTER_API_KEY is not set. Add it to .env"}))]
+            async with HunterConnector(config, keys) as hunter:
+                leads = await hunter.domain_search(domain=domain, limit=limit)
+        else:
+            if not keys.apollo:
+                return [TextContent(type="text", text=json.dumps({"error": "APOLLO_API_KEY is not set. Add it to .env"}))]
+            async with ApolloConnector(config, keys) as apollo:
+                leads = await apollo.search(limit=limit)
 
         added = 0
         for lead in leads:
