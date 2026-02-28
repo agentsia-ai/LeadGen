@@ -7,7 +7,7 @@ and drafted outreach emails. Should take about 30 minutes.
 
 ## Prerequisites
 
-- Python 3.11+
+- Python 3.12+
 - `uv` package manager (recommended) — install at `https://docs.astral.sh/uv/`
 - An Anthropic API key (free credits available at `https://console.anthropic.com`)
 - An Apollo.io account (free tier is fine to start)
