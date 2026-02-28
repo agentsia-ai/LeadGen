@@ -12,8 +12,8 @@ from typing import Any
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from src.config.loader import APIKeys, LeadGenConfig
-from src.models import CompanyInfo, ContactInfo, Lead, LeadSource
+from leadgen.config.loader import APIKeys, LeadGenConfig
+from leadgen.models import CompanyInfo, ContactInfo, Lead, LeadSource
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +98,7 @@ class ApolloConnector:
 
         Args:
             limit:         Max number of leads to return.
-            extra_filters: Additional Apollo filter overrides.
+            extra_filters:  Additional Apollo filter overrides.
 
         Returns:
             List of Lead objects.

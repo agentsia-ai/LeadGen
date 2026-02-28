@@ -19,9 +19,9 @@ from typing import Optional
 
 import aiosmtplib
 
-from src.config.loader import APIKeys, LeadGenConfig
-from src.crm.database import LeadDatabase
-from src.models import Lead, LeadStatus, OutreachRecord
+from leadgen.config.loader import APIKeys, LeadGenConfig
+from leadgen.crm.database import LeadDatabase
+from leadgen.models import Lead, LeadStatus, OutreachRecord
 
 logger = logging.getLogger(__name__)
 
@@ -253,7 +253,7 @@ class EmailSender:
             logger.error(f"SendGrid send failed for {to_email}: {e}")
             return False
 
-    # ── Helpers ───────────────────────────────────────────────────────────────
+    # ── Helpers ──────────────────────────────────────────────────────────────
 
     def _next_pending_record(self, lead: Lead) -> Optional[OutreachRecord]:
         """Find the next approved but unsent outreach record."""
@@ -276,7 +276,7 @@ class EmailSender:
         Sync the in-memory sent counter from the database.
         Call this on startup to account for sends in previous sessions today.
         """
-        from src.models import LeadStatus
+        from leadgen.models import LeadStatus
         today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
 
         # Count leads moved to CONTACTED or FOLLOWING_UP today

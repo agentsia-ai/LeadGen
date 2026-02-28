@@ -9,8 +9,8 @@ import logging
 
 import anthropic
 
-from src.config.loader import APIKeys, LeadGenConfig
-from src.models import Lead, OutreachRecord
+from leadgen.config.loader import APIKeys, LeadGenConfig
+from leadgen.models import Lead, OutreachRecord
 
 logger = logging.getLogger(__name__)
 

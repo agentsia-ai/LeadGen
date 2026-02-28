@@ -62,7 +62,7 @@ dev = [
 leadgen = "leadgen.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src"]
+packages = ["src/leadgen"]
 
 [tool.ruff]
 line-length = 100

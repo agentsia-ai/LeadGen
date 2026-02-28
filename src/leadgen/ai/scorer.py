@@ -11,8 +11,8 @@ from datetime import datetime
 
 import anthropic
 
-from src.config.loader import APIKeys, LeadGenConfig
-from src.models import Lead, ScoringBreakdown
+from leadgen.config.loader import APIKeys, LeadGenConfig
+from leadgen.models import Lead, ScoringBreakdown
 
 logger = logging.getLogger(__name__)
 

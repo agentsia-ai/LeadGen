@@ -38,9 +38,9 @@ def main(ctx, config, debug):
 def search(ctx, limit):
     """Fetch new leads from Apollo.io matching your ICP."""
     async def _run():
-        from src.config.loader import load_config, load_api_keys
-        from src.sources.apollo import ApolloConnector
-        from src.crm.database import LeadDatabase
+        from leadgen.config.loader import load_config, load_api_keys
+        from leadgen.sources.apollo import ApolloConnector
+        from leadgen.crm.database import LeadDatabase
 
         cfg = load_config(ctx.obj.get("config_path"))
         keys = load_api_keys()
@@ -68,10 +68,10 @@ def search(ctx, limit):
 def score(ctx, limit):
     """AI-score unscored leads against your ICP."""
     async def _run():
-        from src.config.loader import load_config, load_api_keys
-        from src.ai.scorer import LeadScorer
-        from src.crm.database import LeadDatabase
-        from src.models import LeadStatus
+        from leadgen.config.loader import load_config, load_api_keys
+        from leadgen.ai.scorer import LeadScorer
+        from leadgen.crm.database import LeadDatabase
+        from leadgen.models import LeadStatus
 
         cfg = load_config(ctx.obj.get("config_path"))
         keys = load_api_keys()
@@ -104,8 +104,8 @@ def score(ctx, limit):
 def pipeline(ctx):
     """Show a summary of the current lead pipeline."""
     async def _run():
-        from src.config.loader import load_config
-        from src.crm.database import LeadDatabase
+        from leadgen.config.loader import load_config
+        from leadgen.crm.database import LeadDatabase
 
         cfg = load_config(ctx.obj.get("config_path"))
         db = LeadDatabase(cfg.database.sqlite_path)
@@ -134,7 +134,7 @@ def pipeline(ctx):
 def mcp(ctx):
     """Start the MCP server for Claude Desktop integration."""
     import asyncio
-    from src.mcp_server.server import main as mcp_main
+    from leadgen.mcp_server.server import main as mcp_main
 
     console.print("[bold green]Starting LeadGen MCP server...[/bold green]")
     console.print("Add this to your Claude Desktop config:")

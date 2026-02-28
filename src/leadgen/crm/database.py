@@ -12,7 +12,7 @@ from pathlib import Path
 
 import aiosqlite
 
-from src.models import Lead, LeadStatus
+from leadgen.models import Lead, LeadStatus
 
 logger = logging.getLogger(__name__)
 
@@ -165,7 +165,7 @@ class LeadDatabase:
     def _row_to_lead(self, row) -> Lead:
         """Convert a DB row tuple back to a Lead model."""
         from datetime import datetime
-        from src.models import ContactInfo, CompanyInfo, OutreachRecord, ScoringBreakdown, LeadSource
+        from leadgen.models import ContactInfo, CompanyInfo, OutreachRecord, ScoringBreakdown, LeadSource
 
         (id_, source, status, contact_json, company_json, score_json,
          outreach_json, notes, tags_json, raw_json, created_at, updated_at,

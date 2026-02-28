@@ -15,8 +15,8 @@ from typing import Optional
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from src.config.loader import APIKeys, LeadGenConfig
-from src.models import ContactInfo, CompanyInfo, Lead, LeadSource
+from leadgen.config.loader import APIKeys, LeadGenConfig
+from leadgen.models import ContactInfo, CompanyInfo, Lead, LeadSource
 
 logger = logging.getLogger(__name__)
 
@@ -212,7 +212,7 @@ class HunterConnector:
         logger.info(f"Hunter enrichment: {verified_count}/{len(enriched)} leads have verified emails")
         return enriched
 
-    # ── Parsing ───────────────────────────────────────────────────────────────
+    # ── Parsing ──────────────────────────────────────────────────────────────
 
     def _parse_email_entry(self, entry: dict, domain: str, org_name: str) -> Lead:
         """Map a Hunter domain-search email entry to a Lead model."""

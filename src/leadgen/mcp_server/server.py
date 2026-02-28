@@ -4,7 +4,8 @@ Exposes LeadGen as an MCP tool server so Claude Desktop (or any MCP client)
 can query leads, trigger searches, score, and draft outreach conversationally.
 
 Usage:
-    python -m leadgen mcp
+    leadgen mcp
+    # or: python -m leadgen.mcp
 
 Then add to Claude Desktop config:
     {
@@ -27,9 +28,9 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
-from src.config.loader import load_config, load_api_keys
-from src.crm.database import LeadDatabase
-from src.models import LeadStatus
+from leadgen.config.loader import load_config, load_api_keys
+from leadgen.crm.database import LeadDatabase
+from leadgen.models import LeadStatus
 
 logger = logging.getLogger(__name__)
 
@@ -203,7 +204,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
     elif name == "fetch_new_leads":
-        from src.sources.apollo import ApolloConnector
+        from leadgen.sources.apollo import ApolloConnector
         limit = arguments.get("limit", 25)
 
         async with ApolloConnector(config, keys) as apollo:
@@ -221,7 +222,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         )]
 
     elif name == "score_leads":
-        from src.ai.scorer import LeadScorer
+        from leadgen.ai.scorer import LeadScorer
         limit = arguments.get("limit", 20)
 
         unscored = await db.list(status=LeadStatus.NEW, limit=limit)
@@ -239,7 +240,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         }))]
 
     elif name == "draft_outreach":
-        from src.ai.drafter import OutreachDrafter
+        from leadgen.ai.drafter import OutreachDrafter
         drafter = OutreachDrafter(config, keys)
 
         if "lead_id" in arguments:
