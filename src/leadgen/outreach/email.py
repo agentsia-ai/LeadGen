@@ -4,9 +4,9 @@ Sends approved outreach emails via SMTP or SendGrid.
 
 Features:
 - Daily send limit enforcement (avoid spam flags)
-- Per-domain cooling (don't hammer the same company)
 - Bounce and unsubscribe handling
 - Dry-run mode for testing without sending
+- TODO: Per-domain cooling (don't hammer the same company)
 """
 
 from __future__ import annotations
@@ -116,6 +116,8 @@ class EmailSender:
 
         Returns a summary dict with sent/skipped/failed counts.
         """
+        await self.sync_sent_today()
+
         sent, skipped, failed = 0, 0, 0
 
         for lead in leads:
@@ -187,7 +189,7 @@ class EmailSender:
 
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
-        msg["From"] = f"{keys.smtp_from_name} <{keys.smtp_from_email}>"
+        msg["From"] = f"{keys.smtp_from_name} <{keys.smtp_from_email}>" if keys.smtp_from_name else keys.smtp_from_email
         msg["To"] = f"{to_name} <{to_email}>"
         msg["Reply-To"] = keys.smtp_from_email
 
@@ -224,8 +226,10 @@ class EmailSender:
         subject: str,
         body: str,
     ) -> bool:
-        """Send via SendGrid API."""
-        try:
+        """Send via SendGrid API. Runs sync client in thread pool to avoid blocking."""
+        import asyncio
+
+        def _do_send() -> bool:
             import sendgrid
             from sendgrid.helpers.mail import Mail, Content, To
 
@@ -237,7 +241,6 @@ class EmailSender:
             )
             message.add_content(Content("text/plain", body))
 
-            # Simple HTML version
             html_body = body.replace("\n\n", "</p><p>").replace("\n", "<br>")
             message.add_content(Content("text/html", f"<html><body><p>{html_body}</p></body></html>"))
 
@@ -245,10 +248,11 @@ class EmailSender:
 
             if response.status_code in (200, 202):
                 return True
-            else:
-                logger.error(f"SendGrid returned {response.status_code} for {to_email}")
-                return False
+            logger.error(f"SendGrid returned {response.status_code} for {to_email}")
+            return False
 
+        try:
+            return await asyncio.to_thread(_do_send)
         except Exception as e:
             logger.error(f"SendGrid send failed for {to_email}: {e}")
             return False
