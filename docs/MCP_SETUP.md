@@ -63,7 +63,7 @@ You can now say things like:
 |------|-------------|
 | `get_pipeline` | Pipeline summary with counts by status |
 | `search_leads` | Filter leads by status, score, limit |
-| `fetch_new_leads` | Pull fresh leads from Apollo |
+| `fetch_new_leads` | Pull fresh leads from Apollo (ICP search) or Hunter (domain search; pass `domain` param) |
 | `score_leads` | AI-score a batch of new leads |
 | `draft_outreach` | Generate personalized email drafts |
 | `approve_outreach` | Mark drafts approved for sending |
