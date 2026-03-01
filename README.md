@@ -223,16 +223,16 @@ Each client gets:
 ### Phase 1 — Core Engine (MVP)
 - [x] Project scaffold & architecture
 - [ ] Apollo.io connector
-- [ ] Hunter.io connector  
-- [ ] Claude lead scoring
-- [ ] SQLite CRM
-- [ ] Email outreach (SMTP)
-- [ ] CLI interface
+- [x] Hunter.io connector
+- [x] Claude lead scoring
+- [x] SQLite CRM
+- [x] Email outreach (SMTP)
+- [x] CLI interface
 
 ### Phase 2 — MCP Layer
-- [ ] MCP server implementation
-- [ ] Claude Desktop integration
-- [ ] Conversational lead review workflow
+- [x] MCP server implementation
+- [x] Claude Desktop integration
+- [ ] Interactive `leadgen review` CLI command
 
 ### Phase 3 — Intelligence
 - [ ] Multi-step outreach sequences
