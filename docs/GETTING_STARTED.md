@@ -137,12 +137,24 @@ This creates your SQLite database and shows a (currently empty) pipeline summary
 
 ## Step 7 — Fetch Your First Leads
 
+**Option A: Apollo** (requires APOLLO_API_KEY)
 ```bash
 leadgen search --limit 20
 ```
 
-This pulls up to 20 leads from Apollo matching your ICP config and saves them 
-to the database. You should see output like:
+**Option B: Hunter** (domain search — no Apollo needed)
+```bash
+leadgen search --domain yourtarget.com --limit 10
+```
+
+**Option C: CSV import**
+```bash
+leadgen import --create-sample    # Creates data/leads_sample.csv
+# Edit data/leads_sample.csv with your leads, then:
+leadgen import data/leads_sample.csv
+```
+
+This saves leads to the database. You should see output like:
 
 ```
 ✓ Fetched 20 leads, 20 new added to database.

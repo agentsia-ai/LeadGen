@@ -97,6 +97,58 @@ def search(ctx, limit, source, domain):
     asyncio.run(_run())
 
 
+@main.command("import")
+@click.argument("file", required=False, type=click.Path(exists=True))
+@click.option("--create-sample", is_flag=True, help="Create a sample CSV at data/leads_sample.csv (gitignored)")
+@click.option("--limit", default=500, help="Max leads to import from folder (when no file given)")
+@click.pass_context
+def import_(ctx, file, create_sample, limit):
+    """Import leads from a CSV file or from the watch folder."""
+    if create_sample:
+        from pathlib import Path
+        from leadgen.sources.csv_import import SAMPLE_CSV_CONTENT
+
+        data_dir = Path("./data")
+        data_dir.mkdir(parents=True, exist_ok=True)
+        sample_path = data_dir / "leads_sample.csv"
+        sample_path.write_text(SAMPLE_CSV_CONTENT, encoding="utf-8")
+        console.print(f"[green]✓[/green] Created {sample_path}")
+        console.print("Edit it with your leads, then run: leadgen import data/leads_sample.csv")
+        return
+
+    async def _run():
+        from leadgen.config.loader import load_config, load_api_keys
+        from leadgen.sources.csv_import import CSVImportConnector
+        from leadgen.crm.database import LeadDatabase
+
+        cfg = load_config(ctx.obj.get("config_path"))
+        keys = load_api_keys()
+        db = LeadDatabase(cfg.database.sqlite_path)
+        await db.init()
+
+        async with CSVImportConnector(cfg, keys) as importer:
+            if file:
+                leads = await importer.import_file(file)
+            else:
+                leads = await importer.import_from_folder(limit=limit)
+
+        if not leads:
+            console.print("[yellow]No leads found.[/yellow]")
+            if not file:
+                console.print("Run 'leadgen import --create-sample' to create a sample CSV in data/")
+            return
+
+        added = 0
+        for lead in leads:
+            is_new = await db.upsert(lead)
+            if is_new:
+                added += 1
+
+        console.print(f"[green]✓[/green] Imported {len(leads)} leads, {added} new added to database.")
+
+    asyncio.run(_run())
+
+
 @main.command()
 @click.option("--limit", default=20, help="Max leads to score")
 @click.pass_context
