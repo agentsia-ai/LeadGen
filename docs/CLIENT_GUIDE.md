@@ -1,6 +1,6 @@
-# Deploying Legion for a New Client
+# Deploying LeadGen for a New Client
 
-This guide walks through setting up a new Legion instance for a client.
+This guide walks through setting up a new LeadGen instance for a client.
 Each client gets their own isolated config, database, and API keys.
 
 ## Estimated Setup Time: 30–60 minutes

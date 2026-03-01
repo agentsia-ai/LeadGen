@@ -1,4 +1,4 @@
-# Architecture — LeadGen / Legion
+# Architecture — LeadGen
 
 A deep dive into design decisions, trade-offs, and the overall system architecture.
 

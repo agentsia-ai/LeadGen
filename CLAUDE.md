@@ -1,4 +1,4 @@
-# CLAUDE.md — LeadGen / Legion
+# CLAUDE.md — LeadGen
 
 This file provides context and instructions for Claude (or any AI assistant) 
 working in this codebase. Read this before making any changes.
@@ -7,7 +7,7 @@ working in this codebase. Read this before making any changes.
 
 ## What This Project Is
 
-LeadGen (branded "Legion") is an AI-powered lead generation engine built by 
+LeadGen is an AI-powered lead generation engine built by 
 Artificial Intelligentsia, LLC d/b/a Agentsia. It is designed to:
 
 1. Source leads from APIs (Apollo.io, Hunter.io) and web crawling

@@ -9,7 +9,7 @@
 
 Most lead generation tools are either too expensive (ZoomInfo, Apollo enterprise), too manual (spreadsheets and cold DMs), or too generic (spray-and-pray email blasts).
 
-**LeadGen/Legion** is different. It's:
+**LeadGen** is different. It's:
 
 - **AI-first** — Claude scores leads, drafts personalized outreach, and learns your ICP
 - **MCP-native** — runs as an MCP server so you can query and control it conversationally via Claude Desktop or any MCP client
@@ -17,7 +17,7 @@ Most lead generation tools are either too expensive (ZoomInfo, Apollo enterprise
 - **Modular** — use the whole stack or just the pieces you need
 - **Yours to white-label** — the architecture is designed so each client gets their own configured instance
 
-The goal: you spend 20 minutes a day reviewing AI-qualified leads and approving outreach drafts. Legion does the rest.
+The goal: you spend 20 minutes a day reviewing AI-qualified leads and approving outreach drafts. LeadGen does the rest.
 
 ---
 
@@ -28,7 +28,7 @@ The goal: you spend 20 minutes a day reviewing AI-qualified leads and approving 
 ```
 ┌─────────────────────────────────────────────────────┐
 │                   MCP SERVER LAYER                  │
-│         (talk to Legion via Claude Desktop)         │
+│         (talk to LeadGen via Claude Desktop)         │
 └────────────────────────┬────────────────────────────┘
                          │
 ┌────────────┐  ┌────────┴───────┐  ┌────────────────┐
@@ -173,14 +173,14 @@ python -m leadgen mcp
 
 ## MCP Integration
 
-Legion exposes itself as an MCP server, meaning you can control it directly from Claude Desktop:
+LeadGen exposes itself as an MCP server, meaning you can control it directly from Claude Desktop:
 
 ```
 "Hey Claude, find me 20 leads in the restaurant industry 
  in Chicago with 10-50 employees and draft intro emails for the top 10."
 ```
 
-Claude will use Legion's MCP tools to:
+Claude will use LeadGen's MCP tools to:
 1. Query your lead database
 2. Pull new leads from Apollo matching the criteria
 3. Score them against your ICP
@@ -204,7 +204,7 @@ Claude will use Legion's MCP tools to:
 
 ## Productization / White-Label
 
-Legion is designed to be sold and deployed as a service. The model:
+LeadGen is designed to be sold and deployed as a service. The model:
 
 1. **Setup fee** — you configure a client instance (ICP, messaging, integrations)
 2. **Monthly retainer** — you run/maintain it, they get leads
@@ -264,7 +264,7 @@ Each client gets:
 
 > Build it for yourself first. If it works for your business, it'll work for theirs.
 
-Legion started as a tool to help one AI consulting LLC find and reach small business clients. Every feature was dogfooded before being generalized. That keeps the product honest and practical.
+LeadGen started as a tool to help one AI consulting LLC find and reach small business clients. Every feature was dogfooded before being generalized. That keeps the product honest and practical.
 
 ---
 
@@ -274,4 +274,4 @@ MIT — use it, fork it, sell configured versions of it. Just don't sell the eng
 
 ---
 
-*Built with Claude. Powered by Legion.*
+*Built with Claude. Powered by LeadGen.*
