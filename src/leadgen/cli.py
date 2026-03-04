@@ -255,6 +255,39 @@ def send(ctx, dry_run, limit):
     asyncio.run(_run())
 
 
+@main.command("apollo-test")
+@click.pass_context
+def apollo_test(ctx):
+    """Test Apollo API key and show plan/access info."""
+    async def _run():
+        from leadgen.config.loader import load_api_keys
+
+        keys = load_api_keys()
+        if not keys.apollo:
+            console.print("[red]✗[/red] APOLLO_API_KEY is not set in .env")
+            return
+
+        try:
+            import httpx
+
+            # Apollo health endpoint - validates key
+            async with httpx.AsyncClient() as client:
+                r = await client.get(
+                    "https://api.apollo.io/v1/auth/health",
+                    headers={"X-Api-Key": keys.apollo, "Cache-Control": "no-cache"},
+                )
+                if r.status_code == 200:
+                    data = r.json()
+                    console.print("[green]✓[/green] Apollo API key is valid.")
+                    console.print(f"  Health: {data}")
+                else:
+                    console.print(f"[red]✗[/red] Apollo returned {r.status_code}: {r.text[:200]}")
+        except Exception as e:
+            console.print(f"[red]✗[/red] Apollo test failed: {e}")
+
+    asyncio.run(_run())
+
+
 @main.command()
 @click.pass_context
 def smtp_test(ctx):

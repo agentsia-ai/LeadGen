@@ -10,25 +10,29 @@ import logging
 from typing import Any
 
 import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_exponential
 
 from leadgen.config.loader import APIKeys, LeadGenConfig
 from leadgen.models import CompanyInfo, ContactInfo, Lead, LeadSource
 
 logger = logging.getLogger(__name__)
 
-APOLLO_BASE_URL = "https://api.apollo.io/v1"
+APOLLO_BASE_URL = "https://api.apollo.io/api/v1"
 
 
 class ApolloConnector:
-    """Fetches leads from Apollo.io People Search API."""
+    """Fetches leads from Apollo.io People API Search."""
 
     def __init__(self, config: LeadGenConfig, keys: APIKeys):
         self.config = config
         self.api_key = keys.apollo
         self.client = httpx.AsyncClient(
             base_url=APOLLO_BASE_URL,
-            headers={"Content-Type": "application/json", "Cache-Control": "no-cache"},
+            headers={
+                "Content-Type": "application/json",
+                "Cache-Control": "no-cache",
+                "x-api-key": self.api_key,
+            },
             timeout=30.0,
         )
 
@@ -38,55 +42,69 @@ class ApolloConnector:
     async def __aexit__(self, *args):
         await self.client.aclose()
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
-    async def _post(self, endpoint: str, payload: dict) -> dict:
-        payload["api_key"] = self.api_key
-        response = await self.client.post(endpoint, json=payload)
-        response.raise_for_status()
-        return response.json()
-
-    def _build_search_payload(
+    def _build_query_params(
         self,
         page: int = 1,
         per_page: int = 25,
         extra_filters: dict | None = None,
     ) -> dict:
-        """Build Apollo people search payload from ICP config."""
+        """Build Apollo api_search query params from ICP config."""
         icp = self.config.icp
         geo = icp.geography
 
-        payload: dict[str, Any] = {
+        params: dict[str, Any] = {
             "page": page,
             "per_page": per_page,
-            "person_titles": [],           # populate if you want specific titles
-            "organization_industry_tag_ids": [],  # map industries if needed
-            "person_locations": [],
-            "organization_num_employees_ranges": [],
         }
 
-        # Geography
+        # Geography — person_locations or organization_locations
+        # Apollo expects "California, US" or "Illinois" format
         if geo.get("cities"):
-            payload["person_locations"] = geo["cities"]
+            params["organization_locations"] = geo["cities"]
         elif geo.get("states"):
-            payload["person_locations"] = [f"{s}, {geo.get('countries', ['US'])[0]}"
-                                           for s in geo["states"]]
+            params["organization_locations"] = [
+                f"{s}, {geo.get('countries', ['US'])[0]}" for s in geo["states"]
+            ]
         elif geo.get("countries"):
-            payload["person_locations"] = geo["countries"]
+            params["organization_locations"] = geo["countries"]
 
         # Employee range
         size = icp.company_size
         lo = size.get("min_employees", 1)
         hi = size.get("max_employees", 10000)
-        payload["organization_num_employees_ranges"] = [f"{lo},{hi}"]
+        params["organization_num_employees_ranges"] = [f"{lo},{hi}"]
 
-        # Industry keywords → Apollo q_organization_keyword_tags
+        # Industry keywords
         if icp.industries:
-            payload["q_organization_keyword_tags"] = icp.industries
+            params["q_keywords"] = " ".join(icp.industries[:5])
 
         if extra_filters:
-            payload.update(extra_filters)
+            params.update(extra_filters)
 
-        return payload
+        return params
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(min=1, max=10),
+        retry=retry_if_not_exception_type(httpx.HTTPStatusError),
+    )
+    async def _api_search(self, params: dict) -> dict:
+        """Call mixed_people/api_search with query params."""
+        # Apollo expects array params as key[]=val&key[]=val
+        flat_params: list[tuple[str, str]] = []
+        for k, v in params.items():
+            if isinstance(v, list):
+                for item in v:
+                    flat_params.append((f"{k}[]", str(item)))
+            elif v is not None and v != "":
+                flat_params.append((k, str(v)))
+
+        response = await self.client.post(
+            "/mixed_people/api_search",
+            params=flat_params,
+        )
+        response.raise_for_status()
+        return response.json()
 
     async def search(
         self,
@@ -111,15 +129,27 @@ class ApolloConnector:
         page = 1
 
         while len(leads) < limit:
-            payload = self._build_search_payload(
+            params = self._build_query_params(
                 page=page, per_page=per_page, extra_filters=extra_filters
             )
             logger.info(f"Fetching Apollo page {page} (want {limit - len(leads)} more leads)")
 
             try:
-                data = await self._post("/mixed_people/search", payload)
+                data = await self._api_search(params)
             except httpx.HTTPStatusError as e:
                 logger.error(f"Apollo API error: {e.response.status_code} — {e.response.text}")
+                if e.response.status_code == 403:
+                    try:
+                        err = e.response.json()
+                        msg = err.get("error", err.get("message", str(err)))
+                    except Exception:
+                        msg = (e.response.text[:200] if e.response.text else "Access denied")
+                    raise ValueError(
+                        f"Apollo 403 Forbidden: {msg}\n"
+                        "This may mean: (1) API key lacks People API Search access, "
+                        "(2) your Apollo plan doesn't include this endpoint, or "
+                        "(3) the key is invalid. Try the health check: leadgen apollo-test"
+                    ) from e
                 break
 
             people = data.get("people", [])
@@ -139,13 +169,19 @@ class ApolloConnector:
         return leads
 
     def _parse_person(self, person: dict) -> Lead:
-        """Map Apollo person dict → Lead model."""
+        """Map Apollo api_search person dict → Lead model.
+
+        Note: api_search does not return email/phone. Use Hunter enrichment to find emails.
+        """
         org = person.get("organization") or {}
+        first = person.get("first_name")
+        last = person.get("last_name") or person.get("last_name_obfuscated", "")
+        full = f"{first or ''} {last or ''}".strip() if (first or last) else None
 
         contact = ContactInfo(
-            first_name=person.get("first_name"),
-            last_name=person.get("last_name"),
-            full_name=person.get("name"),
+            first_name=first,
+            last_name=last if last and "*" not in str(last) else None,
+            full_name=full,
             title=person.get("title"),
             email=person.get("email"),
             email_verified=(person.get("email_status") == "verified"),
