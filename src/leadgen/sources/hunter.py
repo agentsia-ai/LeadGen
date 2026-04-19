@@ -162,6 +162,16 @@ class HunterConnector:
         logger.info(f"Hunter domain search for {domain} returned {len(leads)} contacts")
         return leads
 
+    def _normalize_domain(self, domain: str | None) -> str | None:
+        """Extract clean domain (e.g. company.com) from URL or raw domain."""
+        if not domain or not isinstance(domain, str):
+            return None
+        domain = domain.strip().lower()
+        for prefix in ("https://", "http://", "www."):
+            if domain.startswith(prefix):
+                domain = domain[len(prefix) :]
+        return domain.split("/")[0] if domain else None
+
     # ── Enrichment Helper ─────────────────────────────────────────────────────
 
     async def enrich_lead_email(self, lead: "Lead") -> "Lead":
@@ -174,7 +184,7 @@ class HunterConnector:
         if lead.contact.email and lead.contact.email_verified:
             return lead  # already has a verified email
 
-        domain = lead.company.domain
+        domain = self._normalize_domain(lead.company.domain or lead.company.website)
         first = lead.contact.first_name
         last = lead.contact.last_name
 

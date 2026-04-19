@@ -1,6 +1,14 @@
 """
 LeadGen AI Scorer
-Uses Claude to score leads against your ICP and explain the reasoning.
+Uses Claude to score leads against an ICP and explain the reasoning.
+
+This is the generic engine implementation. To customize for a productized
+agent (e.g. a named persona with tuned scoring behavior), either:
+  1. Subclass `LeadScorer` and override `SYSTEM_PROMPT` (and optionally
+     `_build_score_prompt`), or
+  2. Point `config.ai.scorer_prompt_path` at an external prompt file.
+
+See CLAUDE.md → Customization Patterns for details.
 """
 
 from __future__ import annotations
@@ -8,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
+from pathlib import Path
 
 import anthropic
 
@@ -17,7 +26,7 @@ from leadgen.models import Lead, ScoringBreakdown
 logger = logging.getLogger(__name__)
 
 
-SCORE_SYSTEM_PROMPT = """You are a lead qualification expert. Your job is to score a business lead 
+DEFAULT_SCORE_SYSTEM_PROMPT = """You are a lead qualification expert. Your job is to score a business lead 
 against an Ideal Customer Profile (ICP) and return a structured JSON score.
 
 You must respond with ONLY valid JSON — no preamble, no explanation outside the JSON.
@@ -38,15 +47,45 @@ Each numeric field is a float between 0.0 and 1.0.
 "reasoning" should be 1-3 sentences explaining why this lead is or isn't a good fit.
 """
 
+SCORE_SYSTEM_PROMPT = DEFAULT_SCORE_SYSTEM_PROMPT
+
 
 class LeadScorer:
-    """Scores leads against the configured ICP using Claude."""
+    """Scores leads against the configured ICP using Claude.
+
+    Subclass this and override `SYSTEM_PROMPT` to define a tuned scorer with
+    a custom persona or rubric. Per-deployment overrides can also be supplied
+    by setting `config.ai.scorer_prompt_path` to a text file.
+    """
+
+    SYSTEM_PROMPT: str = DEFAULT_SCORE_SYSTEM_PROMPT
 
     def __init__(self, config: LeadGenConfig, keys: APIKeys):
         self.config = config
         self.client = anthropic.AsyncAnthropic(api_key=keys.anthropic)
         self.weights = config.scoring
         self.threshold = config.scoring.threshold
+        self.model = config.ai.model
+        self._system_prompt = self._load_system_prompt()
+
+    def _load_system_prompt(self) -> str:
+        """Resolve the active system prompt.
+
+        Resolution order:
+          1. `config.ai.scorer_prompt_path` (if set and file exists)
+          2. The class attribute `SYSTEM_PROMPT` (subclass-overridable)
+        """
+        override = self.config.ai.scorer_prompt_path
+        if override:
+            path = Path(override)
+            if path.exists():
+                logger.info(f"LeadScorer using prompt override: {path}")
+                return path.read_text(encoding="utf-8")
+            logger.warning(
+                f"scorer_prompt_path points at missing file: {path} — "
+                f"falling back to {type(self).__name__}.SYSTEM_PROMPT"
+            )
+        return self.SYSTEM_PROMPT
 
     def _build_score_prompt(self, lead: Lead) -> str:
         icp = self.config.icp
@@ -93,14 +132,13 @@ Score this lead now. Return only JSON."""
 
         try:
             response = await self.client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=self.model,
                 max_tokens=500,
-                system=SCORE_SYSTEM_PROMPT,
+                system=self._system_prompt,
                 messages=[{"role": "user", "content": prompt}],
             )
 
             raw_text = response.content[0].text.strip()
-            # Strip markdown code fences if present
             if raw_text.startswith("```"):
                 raw_text = raw_text.split("```")[1]
                 if raw_text.startswith("json"):
@@ -120,7 +158,6 @@ Score this lead now. Return only JSON."""
 
         except (json.JSONDecodeError, KeyError) as e:
             logger.error(f"Failed to parse Claude scoring response: {e}")
-            # Return a zero score rather than crashing
             return ScoringBreakdown(
                 reasoning=f"Scoring failed: {e}",
                 scored_at=datetime.utcnow(),
@@ -138,7 +175,6 @@ Score this lead now. Return only JSON."""
         threshold = min_score if min_score is not None else self.threshold
         scored = []
 
-        # Score concurrently in batches of 5 to avoid rate limits
         for i in range(0, len(leads), 5):
             batch = leads[i : i + 5]
             results = await asyncio.gather(*[self.score(lead) for lead in batch])

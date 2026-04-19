@@ -1,11 +1,22 @@
 """
 LeadGen AI Outreach Drafter
 Uses Claude to write personalized outreach emails for each lead.
+
+This is the generic engine implementation. To customize for a productized
+agent (e.g. a named persona with a distinctive voice), either:
+  1. Subclass `OutreachDrafter` and override `INITIAL_SYSTEM_PROMPT` and/or
+     `FOLLOWUP_SYSTEM_PROMPT` (and optionally the `_build_*_prompt` methods), or
+  2. Point `config.ai.drafter_prompt_path` and `config.ai.followup_prompt_path`
+     at external prompt files.
+
+See CLAUDE.md → Customization Patterns for details.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 
 import anthropic
 
@@ -15,8 +26,7 @@ from leadgen.models import Lead, OutreachRecord
 logger = logging.getLogger(__name__)
 
 
-DRAFT_SYSTEM_PROMPT = """You are an expert B2B sales copywriter specializing in cold outreach for 
-small business AI consulting services. 
+DEFAULT_INITIAL_SYSTEM_PROMPT = """You are an expert B2B cold-outreach copywriter.
 
 Write emails that:
 - Feel personal and researched, not templated
@@ -35,7 +45,7 @@ Return ONLY the email content in this JSON format:
 No preamble. No explanation. Just the JSON."""
 
 
-FOLLOW_UP_SYSTEM_PROMPT = """You are writing follow-up emails in a B2B cold outreach sequence.
+DEFAULT_FOLLOWUP_SYSTEM_PROMPT = """You are writing follow-up emails in a B2B cold outreach sequence.
 
 Follow-up rules:
 - Reference the previous email briefly and naturally
@@ -46,13 +56,51 @@ Follow-up rules:
 Return ONLY JSON: {"subject": "...", "body": "..."}"""
 
 
+DRAFT_SYSTEM_PROMPT = DEFAULT_INITIAL_SYSTEM_PROMPT
+FOLLOW_UP_SYSTEM_PROMPT = DEFAULT_FOLLOWUP_SYSTEM_PROMPT
+
+
 class OutreachDrafter:
-    """Drafts personalized outreach using Claude."""
+    """Drafts personalized outreach using Claude.
+
+    Subclass this and override `INITIAL_SYSTEM_PROMPT` / `FOLLOWUP_SYSTEM_PROMPT`
+    to define a tuned drafter with a custom voice. Per-deployment overrides can
+    also be supplied via `config.ai.drafter_prompt_path` and
+    `config.ai.followup_prompt_path`.
+    """
+
+    INITIAL_SYSTEM_PROMPT: str = DEFAULT_INITIAL_SYSTEM_PROMPT
+    FOLLOWUP_SYSTEM_PROMPT: str = DEFAULT_FOLLOWUP_SYSTEM_PROMPT
 
     def __init__(self, config: LeadGenConfig, keys: APIKeys):
         self.config = config
         self.client = anthropic.AsyncAnthropic(api_key=keys.anthropic)
         self.op = config  # shorthand
+        self.model = config.ai.model
+        self._initial_prompt = self._load_initial_prompt()
+        self._followup_prompt = self._load_followup_prompt()
+
+    def _load_prompt(self, override_path: str | None, fallback: str, label: str) -> str:
+        if override_path:
+            path = Path(override_path)
+            if path.exists():
+                logger.info(f"OutreachDrafter using {label} prompt override: {path}")
+                return path.read_text(encoding="utf-8")
+            logger.warning(
+                f"{label}_prompt_path points at missing file: {path} — "
+                f"falling back to {type(self).__name__} default"
+            )
+        return fallback
+
+    def _load_initial_prompt(self) -> str:
+        return self._load_prompt(
+            self.config.ai.drafter_prompt_path, self.INITIAL_SYSTEM_PROMPT, "drafter"
+        )
+
+    def _load_followup_prompt(self) -> str:
+        return self._load_prompt(
+            self.config.ai.followup_prompt_path, self.FOLLOWUP_SYSTEM_PROMPT, "followup"
+        )
 
     def _build_initial_prompt(self, lead: Lead) -> str:
         vp = self.config.value_prop
@@ -114,25 +162,27 @@ Title: {lead.contact.title or 'Unknown'}
 
 Keep it very short. Add a new angle or value point. Don't be pushy."""
 
+    @staticmethod
+    def _parse_json_response(raw: str) -> dict:
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        return json.loads(raw)
+
     async def draft_initial(self, lead: Lead) -> OutreachRecord:
         """Draft the initial outreach email for a lead."""
         prompt = self._build_initial_prompt(lead)
 
         response = await self.client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=self.model,
             max_tokens=600,
-            system=DRAFT_SYSTEM_PROMPT,
+            system=self._initial_prompt,
             messages=[{"role": "user", "content": prompt}],
         )
 
-        import json
-        raw = response.content[0].text.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-
-        data = json.loads(raw)
+        data = self._parse_json_response(response.content[0].text)
         record = OutreachRecord(
             type="email",
             subject=data["subject"],
@@ -154,20 +204,13 @@ Keep it very short. Add a new angle or value point. Don't be pushy."""
         prompt = self._build_followup_prompt(lead, step)
 
         response = await self.client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=self.model,
             max_tokens=400,
-            system=FOLLOW_UP_SYSTEM_PROMPT,
+            system=self._followup_prompt,
             messages=[{"role": "user", "content": prompt}],
         )
 
-        import json
-        raw = response.content[0].text.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-
-        data = json.loads(raw)
+        data = self._parse_json_response(response.content[0].text)
         record = OutreachRecord(
             type="email",
             subject=data["subject"],

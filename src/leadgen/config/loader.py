@@ -46,6 +46,7 @@ class OutreachConfig(BaseModel):
 class SourcesConfig(BaseModel):
     apollo: dict[str, Any] = {"enabled": False}
     hunter: dict[str, Any] = {"enabled": False}
+    pdl: dict[str, Any] = {"enabled": False}
     web_crawl: dict[str, Any] = {"enabled": False}
     csv_import: dict[str, Any] = {"enabled": True, "watch_folder": "./imports"}
 
@@ -72,6 +73,20 @@ class DatabaseConfig(BaseModel):
     supabase_url: str = ""
 
 
+class AIConfig(BaseModel):
+    """Optional AI customization. Lets a deployment swap the default Claude
+    model and/or override the engine's built-in system prompts by pointing at
+    external text files — without subclassing.
+
+    Subclassing the `LeadScorer` / `OutreachDrafter` classes is the other
+    supported customization path; see CLAUDE.md → Customization Patterns.
+    """
+    model: str = "claude-sonnet-4-20250514"
+    scorer_prompt_path: str | None = None
+    drafter_prompt_path: str | None = None
+    followup_prompt_path: str | None = None
+
+
 class LeadGenConfig(BaseModel):
     client_name: str
     operator_name: str
@@ -83,6 +98,7 @@ class LeadGenConfig(BaseModel):
     sources: SourcesConfig = SourcesConfig()
     scoring: ScoringConfig = ScoringConfig()
     database: DatabaseConfig = DatabaseConfig()
+    ai: AIConfig = AIConfig()
 
 
 # ── API Keys (from environment only — never in config files) ─────────────────
@@ -91,6 +107,7 @@ class APIKeys(BaseModel):
     anthropic: str = Field(default="", alias="ANTHROPIC_API_KEY")
     apollo: str = Field(default="", alias="APOLLO_API_KEY")
     hunter: str = Field(default="", alias="HUNTER_API_KEY")
+    pdl: str = Field(default="", alias="PDL_API_KEY")
     clearbit: str = Field(default="", alias="CLEARBIT_API_KEY")
     sendgrid: str = Field(default="", alias="SENDGRID_API_KEY")
     smtp_host: str = Field(default="smtp.gmail.com", alias="SMTP_HOST")

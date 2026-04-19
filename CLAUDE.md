@@ -7,17 +7,21 @@ working in this codebase. Read this before making any changes.
 
 ## What This Project Is
 
-LeadGen is an AI-powered lead generation engine built by 
-Artificial Intelligentsia, LLC d/b/a Agentsia. It is designed to:
+LeadGen is a generic, AGPL-licensed AI-powered lead generation engine. It is
+designed to be the open-source core that any operator (solo consultant,
+agency, or in-house team) can configure and deploy. It is designed to:
 
-1. Source leads from APIs (Apollo.io, Hunter.io) and web crawling
+1. Source leads from APIs (Apollo.io, Hunter.io, People Data Labs) and web crawling
 2. Enrich and score leads against a configurable Ideal Customer Profile (ICP) using Claude
 3. Draft personalized outreach emails using Claude
 4. Track leads through a pipeline in a local SQLite (or cloud Supabase) database
 5. Expose all functionality as an MCP server for conversational control via Claude Desktop
-6. Be white-labeled and deployed for clients with different ICPs and messaging
+6. Support productized deployments via subclassing or config-based prompt overrides
+   (see "Customization Patterns" below)
 
-The primary operator is a solo AI consulting LLC targeting small-to-medium businesses.
+This repository is intentionally **identity-free**. Anything specific to a
+particular operator, brand, named agent, ICP, or value proposition belongs in
+a downstream private repository or a local `config.yaml` — never in this codebase.
 
 ---
 
@@ -88,10 +92,16 @@ The `outreach.require_approval` config flag defaults to `true`. Never send
 emails autonomously unless this is explicitly disabled. When in doubt, draft 
 and queue, don't send.
 
-### 6. White-label ready
-Avoid any hardcoded references to "Agentsia" or the operator's identity in 
-engine code. All identity comes from config. The only exception is this file 
-and the LICENSE.
+### 6. White-label ready / identity-free
+The engine code must not contain any operator-specific identity, brand name,
+named agent persona, ICP details, or value proposition. All identity flows in
+through `config.yaml` at runtime, or through a downstream subclass that
+overrides the base classes (see "Customization Patterns" below). The only
+exception is the LICENSE copyright line, which is required by AGPL-3.0.
+
+If you find yourself wanting to bake "Agent X says..." or "Company Y targets..."
+into a prompt or default value here, stop — that belongs in a downstream
+private repo, not in this engine.
 
 ---
 
@@ -144,16 +154,17 @@ leadgen mcp
 
 This project uses Claude for two things:
 
-### 1. Lead Scoring (`src/ai/scorer.py`)
-- Model: `claude-sonnet-4-20250514`
+### 1. Lead Scoring (`src/leadgen/ai/scorer.py`)
+- Default model: `claude-sonnet-4-20250514` (override via `ai.model` in config)
 - Returns structured JSON with per-dimension scores and reasoning
-- Prompt is in `SCORE_SYSTEM_PROMPT` — edit this to tune scoring behavior
+- Default prompt lives on the `LeadScorer.SYSTEM_PROMPT` class attribute
 - Runs in batches of 5 to manage rate limits
 
-### 2. Outreach Drafting (`src/ai/drafter.py`)
-- Model: `claude-sonnet-4-20250514`
+### 2. Outreach Drafting (`src/leadgen/ai/drafter.py`)
+- Default model: `claude-sonnet-4-20250514` (override via `ai.model` in config)
 - Returns JSON `{"subject": "...", "body": "..."}`
-- Two system prompts: `DRAFT_SYSTEM_PROMPT` (initial) and `FOLLOW_UP_SYSTEM_PROMPT`
+- Default prompts live on `OutreachDrafter.INITIAL_SYSTEM_PROMPT` and
+  `OutreachDrafter.FOLLOWUP_SYSTEM_PROMPT` class attributes
 - Tone and value prop are injected from config at runtime
 
 ### Prompt tuning tips
@@ -161,6 +172,47 @@ This project uses Claude for two things:
 - Drafting quality improves when `value_prop.one_liner` is concrete and benefit-focused
 - If scores feel off, add examples to the scoring prompt as few-shot demonstrations
 - Keep `max_tokens` tight — 500 for scoring, 600 for drafts, 400 for follow-ups
+
+---
+
+## Customization Patterns
+
+There are two supported ways to customize prompt behavior without modifying
+this engine:
+
+### Pattern A — Config-based prompt override (no code)
+Point at external prompt files in your `config.yaml`:
+
+```yaml
+ai:
+  model: "claude-sonnet-4-20250514"
+  scorer_prompt_path: "./prompts/scorer.txt"
+  drafter_prompt_path: "./prompts/drafter.txt"
+  followup_prompt_path: "./prompts/followup.txt"
+```
+
+The base `LeadScorer` / `OutreachDrafter` will read these files at
+construction time and use them as the system prompt.
+
+### Pattern B — Subclassing (for productized agents)
+For named agents with personas (e.g. a downstream private repo defining
+"Rex" or "ARIA"), subclass and override:
+
+```python
+from leadgen.ai.scorer import LeadScorer
+from leadgen.ai.drafter import OutreachDrafter
+
+class RexScorer(LeadScorer):
+    SYSTEM_PROMPT = "You are Rex, a meticulous lead qualification analyst..."
+
+class RexDrafter(OutreachDrafter):
+    INITIAL_SYSTEM_PROMPT = "You are Rex's drafting voice..."
+    FOLLOWUP_SYSTEM_PROMPT = "..."
+```
+
+Both patterns can be combined (subclass for code-level customization, then
+override per-deployment via config). This three-tier model (engine → named
+agent → per-client config) is the canonical productization shape.
 
 ---
 

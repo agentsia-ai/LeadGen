@@ -31,6 +31,7 @@ class LeadStatus(str, Enum):
 class LeadSource(str, Enum):
     APOLLO = "apollo"
     HUNTER = "hunter"
+    PDL = "pdl"
     WEB_CRAWL = "web_crawl"
     CSV_IMPORT = "csv_import"
     MANUAL = "manual"

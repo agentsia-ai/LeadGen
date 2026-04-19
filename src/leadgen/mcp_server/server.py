@@ -75,7 +75,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="fetch_new_leads",
-            description="Pull fresh leads from Apollo.io (ICP search) or Hunter.io (domain search). Use domain for Hunter; omit for Apollo.",
+            description="Pull fresh leads from Apollo, Hunter, or People Data Labs. Use domain for Hunter; use source='pdl' for PDL (100 free credits/mo); omit both for Apollo.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -85,7 +85,12 @@ async def list_tools() -> list[Tool]:
                     },
                     "domain": {
                         "type": "string",
-                        "description": "Company domain for Hunter search (e.g. acmecorp.com). When provided, uses Hunter instead of Apollo.",
+                        "description": "Company domain for Hunter search (e.g. acmecorp.com). When provided, uses Hunter.",
+                    },
+                    "source": {
+                        "type": "string",
+                        "enum": ["apollo", "hunter", "pdl"],
+                        "description": "Lead source: apollo, hunter (requires domain), or pdl (100 free credits/month).",
                     },
                 },
             },
@@ -210,14 +215,26 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     elif name == "fetch_new_leads":
         from leadgen.sources.apollo import ApolloConnector
         from leadgen.sources.hunter import HunterConnector
+        from leadgen.sources.pdl import PDLConnector
         limit = arguments.get("limit", 25)
         domain = arguments.get("domain")
+        src = arguments.get("source")
 
-        if domain:
+        use_hunter = src == "hunter" or (src is None and domain)
+        use_pdl = src == "pdl"
+
+        if use_hunter:
+            if not domain:
+                return [TextContent(type="text", text=json.dumps({"error": "Hunter requires domain parameter"}))]
             if not keys.hunter:
                 return [TextContent(type="text", text=json.dumps({"error": "HUNTER_API_KEY is not set. Add it to .env"}))]
             async with HunterConnector(config, keys) as hunter:
                 leads = await hunter.domain_search(domain=domain, limit=limit)
+        elif use_pdl:
+            if not keys.pdl:
+                return [TextContent(type="text", text=json.dumps({"error": "PDL_API_KEY is not set. Add it to .env"}))]
+            async with PDLConnector(config, keys) as pdl:
+                leads = await pdl.search(limit=limit)
         else:
             if not keys.apollo:
                 return [TextContent(type="text", text=json.dumps({"error": "APOLLO_API_KEY is not set. Add it to .env"}))]

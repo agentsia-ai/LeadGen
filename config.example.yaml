@@ -1,29 +1,32 @@
 # ============================================================
-# LeadGen / Legion — Client Configuration Template
-# Copy to config.yaml and customize for your use case
+# LeadGen — Client Configuration Template
+# Copy to config.yaml and customize for your use case.
+#
+# config.yaml is gitignored. Never commit a configured copy
+# of this file to a public repository.
 # ============================================================
 
 # --- Identity ---
+# Who is sending the outreach? This is injected into prompts and signatures.
 client_name: "Your Business Name"
 operator_name: "Your Name"
-operator_title: "AI Solutions Consultant"
-operator_email: "you@yourdomain.com"
+operator_title: "Your Title"
+operator_email: "you@example.com"
 
 # --- Ideal Customer Profile (ICP) ---
 icp:
-  # Industries to target (use plain English)
+  # Industries to target (use plain English, as many or as few as you like)
   industries:
-    - "restaurants and food service"
-    - "retail"
-    - "professional services"
-    - "healthcare clinics"
+    - "industry one"
+    - "industry two"
+    - "industry three"
 
-  # Company size range
+  # Company size range (employees)
   company_size:
     min_employees: 5
     max_employees: 200
 
-  # Revenue range (optional, in USD)
+  # Revenue range (optional, USD)
   annual_revenue:
     min: 500000
     max: 10000000
@@ -34,12 +37,10 @@ icp:
     states: []          # leave empty for all states
     cities: []          # leave empty for all cities
 
-  # Pain points your solution addresses
+  # Pain points your offering addresses
   pain_points:
-    - "manual repetitive tasks"
-    - "customer communication"
-    - "scheduling and operations"
-    - "data analysis and reporting"
+    - "pain point one"
+    - "pain point two"
 
   # Keywords that indicate a good fit
   positive_signals:
@@ -47,22 +48,24 @@ icp:
     - "hiring operations manager"
     - "digital transformation"
 
-  # Keywords that indicate a bad fit
+  # Keywords that indicate a bad fit (disqualifiers)
   negative_signals:
     - "enterprise software"
     - "fortune 500"
     - "government"
+    - "publicly traded"
 
 # --- Value Proposition ---
+# How you describe what you do. Used by the drafter to write outreach.
 value_prop:
-  headline: "AI automation for small businesses — without the enterprise price tag"
+  headline: "One-line headline for what you offer"
   one_liner: >
-    We help small businesses save 10+ hours a week by automating their most
-    repetitive tasks using AI — implemented in days, not months.
+    A 1–2 sentence value proposition that explains who you help, what
+    outcome you deliver, and why it matters.
   proof_points:
-    - "Typical client saves 10-15 hours/week within 30 days"
-    - "No long-term contracts, month-to-month"
-    - "We handle setup and training"
+    - "Concrete result or guarantee #1"
+    - "Concrete result or guarantee #2"
+    - "Concrete result or guarantee #3"
 
 # --- Outreach Settings ---
 outreach:
@@ -78,25 +81,40 @@ outreach:
   # Max follow-ups per lead before marking cold
   max_follow_ups: 3
 
-  # Require human approval before sending?
+  # Require human approval before sending? Recommended: true.
   require_approval: true
 
-  # Email signature (optional HTML)
+  # Email signature template. {operator_name}, {operator_title},
+  # {operator_email} are substituted at runtime.
   signature: |
     Best,
     {operator_name}
     {operator_title}
     {operator_email}
 
+# --- AI Customization ---
+# Optional: point at custom prompt files to override the engine defaults
+# without subclassing. Paths are relative to the working directory.
+# Leave commented to use the built-in generic prompts.
+ai:
+  model: "claude-sonnet-4-20250514"
+  # scorer_prompt_path: "./prompts/scorer.txt"
+  # drafter_prompt_path: "./prompts/drafter.txt"
+  # followup_prompt_path: "./prompts/followup.txt"
+
 # --- Lead Sources ---
 sources:
   apollo:
-    enabled: true
+    enabled: false
     results_per_search: 50
 
   hunter:
-    enabled: true
+    enabled: false
     verify_emails: true
+
+  pdl:
+    enabled: false   # People Data Labs — 100 free credits/month
+    # Set enabled: true and add PDL_API_KEY to .env
 
   web_crawl:
     enabled: false
