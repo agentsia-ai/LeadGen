@@ -140,7 +140,7 @@ LeadGen/
 ├── pyproject.toml        # Project metadata and dependencies
 ├── .env.example          # Required environment variables
 ├── .gitignore
-└── LICENSE               # MIT
+└── LICENSE               # AGPL-3.0
 ```
 
 ---
@@ -270,7 +270,7 @@ LeadGen started as a tool to help one AI consulting LLC find and reach small bus
 
 ## License
 
-MIT — use it, fork it, sell configured versions of it. Just don't sell the engine itself as-is without modification.
+AGPL-3.0 — free to use, modify, and distribute. If you run a modified version as a network service, you must open-source your modifications under the same license. See [LICENSE](LICENSE) for full terms.
 
 ---
 
