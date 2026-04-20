@@ -39,9 +39,17 @@ logger = logging.getLogger(__name__)
 # ── Server init ───────────────────────────────────────────────────────────────
 
 app = Server("leadgen")
-config = load_config()
-keys = load_api_keys()
-db = LeadDatabase(config.database.sqlite_path)
+
+# Config / keys / database are initialized in main() rather than at import time
+# so that the cwd has had a chance to be set by the caller (e.g. agentsia-core's
+# AgentContext.activate() chdir's into agents/<agent>/ before invoking main()).
+# Loading at import time would search for `config.yaml` in whatever cwd happened
+# to be active when the module first got imported, which is rarely correct.
+# Tool handlers below read these as module globals at call time, so they see
+# the values main() assigns.
+config = None  # type: ignore[assignment]
+keys = None    # type: ignore[assignment]
+db = None      # type: ignore[assignment]
 
 # ── Pluggable scorer / drafter classes ────────────────────────────────────────
 # These default to the generic engine implementations. Downstream productized
@@ -371,13 +379,20 @@ async def main(
     use by productized agents (e.g. `RexScorer`, `RexDrafter`). Defaults
     use the generic engine classes.
     """
-    global SCORER_CLASS, DRAFTER_CLASS
+    global SCORER_CLASS, DRAFTER_CLASS, config, keys, db
     if scorer_cls is not None:
         SCORER_CLASS = scorer_cls
         logger.info(f"MCP scorer class overridden: {scorer_cls.__module__}.{scorer_cls.__name__}")
     if drafter_cls is not None:
         DRAFTER_CLASS = drafter_cls
         logger.info(f"MCP drafter class overridden: {drafter_cls.__module__}.{drafter_cls.__name__}")
+
+    # Load config/keys/db now that cwd is final. Doing this here (instead of
+    # at module import) is what lets agentsia-core's AgentContext.activate()
+    # chdir into agents/<agent>/ before the engine reads `config.yaml`.
+    config = load_config()
+    keys = load_api_keys()
+    db = LeadDatabase(config.database.sqlite_path)
 
     logging.basicConfig(level=logging.INFO)
     logger.info("Starting LeadGen MCP server...")
