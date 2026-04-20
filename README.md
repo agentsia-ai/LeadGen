@@ -142,8 +142,8 @@ LeadGen/
 git clone https://github.com/yourusername/LeadGen.git
 cd LeadGen
 
-# 2. Install
-pip install -e ".[dev]"
+# 2. Install (uv-managed; uv.lock pins exact deps)
+uv sync --extra dev
 
 # 3. Configure
 cp .env.example .env          # add your API keys
