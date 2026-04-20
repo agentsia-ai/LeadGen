@@ -28,6 +28,8 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
+from leadgen.ai.drafter import OutreachDrafter
+from leadgen.ai.scorer import LeadScorer
 from leadgen.config.loader import load_config, load_api_keys
 from leadgen.crm.database import LeadDatabase
 from leadgen.models import LeadStatus
@@ -40,6 +42,15 @@ app = Server("leadgen")
 config = load_config()
 keys = load_api_keys()
 db = LeadDatabase(config.database.sqlite_path)
+
+# ── Pluggable scorer / drafter classes ────────────────────────────────────────
+# These default to the generic engine implementations. Downstream productized
+# agents (e.g. agentsia-core's Rex) override them by passing scorer_cls /
+# drafter_cls to main(), which sets the module-level globals before the MCP
+# server starts handling requests. Tool handlers below read these globals at
+# request time, so injection takes effect for every subsequent call.
+SCORER_CLASS: type[LeadScorer] = LeadScorer
+DRAFTER_CLASS: type[OutreachDrafter] = OutreachDrafter
 
 
 # ── Tool definitions ──────────────────────────────────────────────────────────
@@ -253,11 +264,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         )]
 
     elif name == "score_leads":
-        from leadgen.ai.scorer import LeadScorer
         limit = arguments.get("limit", 20)
 
         unscored = await db.list(status=LeadStatus.NEW, limit=limit)
-        scorer = LeadScorer(config, keys)
+        scorer = SCORER_CLASS(config, keys)
         scored = await scorer.score_batch(unscored)
 
         for lead in unscored:
@@ -271,8 +281,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         }))]
 
     elif name == "draft_outreach":
-        from leadgen.ai.drafter import OutreachDrafter
-        drafter = OutreachDrafter(config, keys)
+        drafter = DRAFTER_CLASS(config, keys)
 
         if "lead_id" in arguments:
             lead = await db.get(arguments["lead_id"])
@@ -352,7 +361,24 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-async def main():
+async def main(
+    scorer_cls: type[LeadScorer] | None = None,
+    drafter_cls: type[OutreachDrafter] | None = None,
+) -> None:
+    """Start the MCP server.
+
+    Optionally inject custom `LeadScorer` / `OutreachDrafter` subclasses for
+    use by productized agents (e.g. `RexScorer`, `RexDrafter`). Defaults
+    use the generic engine classes.
+    """
+    global SCORER_CLASS, DRAFTER_CLASS
+    if scorer_cls is not None:
+        SCORER_CLASS = scorer_cls
+        logger.info(f"MCP scorer class overridden: {scorer_cls.__module__}.{scorer_cls.__name__}")
+    if drafter_cls is not None:
+        DRAFTER_CLASS = drafter_cls
+        logger.info(f"MCP drafter class overridden: {drafter_cls.__module__}.{drafter_cls.__name__}")
+
     logging.basicConfig(level=logging.INFO)
     logger.info("Starting LeadGen MCP server...")
     async with stdio_server() as (read_stream, write_stream):
