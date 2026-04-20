@@ -80,68 +80,58 @@ That's it. One config, one client.
 ```
 LeadGen/
 ├── src/
-│   ├── sources/          # Lead acquisition connectors
-│   │   ├── apollo.py     # Apollo.io API connector
-│   │   ├── hunter.py     # Hunter.io email finder
-│   │   ├── crawler.py    # Playwright-based web crawler
-│   │   └── csv_import.py # Manual CSV import
-│   │
-│   ├── enrichment/       # Making leads smarter
-│   │   ├── scorer.py     # Claude-powered ICP scoring
-│   │   ├── enricher.py   # Company/contact enrichment
-│   │   └── deduper.py    # Deduplication logic
-│   │
-│   ├── outreach/         # Taking action
-│   │   ├── email.py      # SMTP / SendGrid email sender
-│   │   ├── drafter.py    # Claude-powered message drafting
-│   │   ├── sequences.py  # Multi-step follow-up sequences
-│   │   └── linkedin.py   # LinkedIn outreach (API-based)
-│   │
-│   ├── crm/              # Tracking everything
-│   │   ├── database.py   # SQLite/Supabase abstraction
-│   │   ├── pipeline.py   # Lead status management
-│   │   └── scheduler.py  # Follow-up scheduling
-│   │
-│   ├── mcp_server/       # MCP interface (the magic layer)
-│   │   ├── server.py     # MCP server definition
-│   │   ├── tools.py      # MCP tool definitions
-│   │   └── prompts.py    # MCP prompt templates
-│   │
-│   ├── ai/               # Claude integration
-│   │   ├── client.py     # Anthropic API client wrapper
-│   │   ├── scorer.py     # Lead scoring prompts
-│   │   ├── drafter.py    # Outreach drafting prompts
-│   │   └── analyzer.py   # Campaign analysis
-│   │
-│   └── config/           # Configuration management
-│       ├── loader.py     # Config file loader
-│       ├── validator.py  # Config validation
-│       └── schema.py     # Config schema definitions
-│
-├── tests/
-│   ├── unit/             # Unit tests per module
-│   └── integration/      # End-to-end flow tests
+│   └── leadgen/                # The package (standard Python src-layout)
+│       ├── __init__.py
+│       ├── cli.py              # Click CLI entry point (`leadgen ...`)
+│       ├── mcp.py              # `python -m leadgen.mcp` MCP entry shim
+│       ├── models.py           # Lead, ContactInfo, CompanyInfo, etc. — the
+│       │                       # data contract every layer speaks in
+│       │
+│       ├── ai/                 # Claude integration
+│       │   ├── scorer.py       # LeadScorer — ICP scoring (subclass-ready)
+│       │   └── drafter.py      # OutreachDrafter — initial + follow-up
+│       │                       # (subclass-ready, prompt-path overridable)
+│       │
+│       ├── config/
+│       │   └── loader.py       # Pydantic config + AIConfig + APIKeys loader
+│       │
+│       ├── sources/            # Lead acquisition connectors
+│       │   ├── hunter.py       # Hunter.io email finder/verifier
+│       │   ├── apollo.py       # Apollo.io People Search
+│       │   ├── pdl.py          # People Data Labs (free tier alternative)
+│       │   ├── maps.py         # Google Maps Places (local business search)
+│       │   ├── crawler.py      # Playwright-based web crawler
+│       │   └── csv_import.py   # Manual CSV import
+│       │
+│       ├── enrichment/
+│       │   └── enricher.py     # Company/contact enrichment (Clearbit, etc.)
+│       │
+│       ├── outreach/
+│       │   └── email.py        # SMTP / SendGrid email sender
+│       │
+│       ├── crm/
+│       │   └── database.py     # Async SQLite (Supabase planned)
+│       │
+│       └── mcp_server/
+│           └── server.py       # MCP server exposing all tools
 │
 ├── docs/
-│   ├── ARCHITECTURE.md   # Deep dive on design decisions
-│   ├── MCP_SETUP.md      # How to connect to Claude Desktop
-│   ├── CLIENT_GUIDE.md   # How to deploy for a new client
-│   └── API_KEYS.md       # Which APIs you need and how to get them
+│   ├── GETTING_STARTED.md
+│   ├── MCP_SETUP.md
+│   └── ...
 │
-├── examples/
-│   ├── configs/          # Example client config files
-│   └── notebooks/        # Jupyter exploration notebooks
-│
-├── scripts/
-│   ├── setup.sh          # One-command environment setup
-│   └── new_client.sh     # Scaffold a new client config
-│
-├── config.example.yaml   # Template config (copy → config.yaml)
-├── pyproject.toml        # Project metadata and dependencies
-├── .env.example          # Required environment variables
+├── config.example.yaml         # Template config (copy → config.yaml)
+├── pyproject.toml              # Project metadata and dependencies
+├── .env.example                # Required environment variables
 ├── .gitignore
-└── LICENSE               # AGPL-3.0
+├── CLAUDE.md                   # AI-assistant context for working in this repo
+└── LICENSE                     # AGPL-3.0
 ```
+
+> **Customizing for a productized agent (named persona, tuned prompts)?**
+> See `CLAUDE.md` → Customization Patterns. The base classes are designed to
+> be subclassed (or have prompts swapped via config) from a downstream
+> private repository — that's the supported productization path.
 
 ---
 
@@ -255,8 +245,26 @@ Each client gets:
 | Anthropic | Lead scoring, message drafting | Pay-per-use |
 | Apollo.io | Lead sourcing | Yes (limited) |
 | Hunter.io | Email finding/verification | Yes (25/mo) |
+| People Data Labs | Lead sourcing (Apollo alternative) | Yes (100 credits/mo) |
+| Google Maps Places | Local business sourcing | $200/mo credit |
 | SendGrid (or SMTP) | Email sending | Yes (100/day) |
 | Clearbit | Company enrichment | Limited free |
+
+### Source maturity
+
+Not all sources are equally battle-tested. As of the current release:
+
+| Source | Status | Notes |
+|--------|--------|-------|
+| **Hunter.io** | ✅ Primary | Email finding/verification — the dependable workhorse |
+| **People Data Labs** | 🟡 Implemented, lightly tested | Strong free tier (100 credits/mo); good Apollo alternative |
+| **Google Maps Places** | 🟡 Implemented | Best for local-business ICPs (home services, restaurants, etc.) |
+| **Apollo.io** | ⚠️ Implemented, known issues | Free tier is rate-limited and pagination behaves inconsistently. Default disabled in config. |
+| **CSV import** | ✅ Stable | Manual workflow / data brought in from elsewhere |
+| **Web crawler** | 🚧 Stub | Playwright scaffold only — not production ready |
+| **Clearbit (enrichment)** | 🚧 Stub | Code path exists, not exercised |
+
+If you're starting fresh: **enable Hunter + (PDL or Maps) and skip Apollo until the free-tier issues are sorted**. The `config.example.yaml` defaults already lean this way.
 
 ---
 

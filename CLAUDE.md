@@ -248,11 +248,29 @@ with `unittest.mock.AsyncMock` — never make real API calls in tests.
 
 ---
 
+## Lead Source Maturity
+
+Not all `src/leadgen/sources/*` connectors are equally production-ready.
+Treat the table below as the source of truth when picking what to enable:
+
+| Source | Status | Notes |
+|--------|--------|-------|
+| `hunter.py` | ✅ Primary | Email finding/verification — most reliable |
+| `pdl.py` | 🟡 Lightly tested | Generous free tier; Apollo alternative |
+| `maps.py` | 🟡 Implemented | Google Maps Places — best for local-business ICPs |
+| `apollo.py` | ⚠️ Issues on free tier | Rate-limit/pagination quirks; disabled by default |
+| `csv_import.py` | ✅ Stable | Manual / external data |
+| `crawler.py` | 🚧 Stub only | Playwright scaffold, not production ready |
+
+Default config (`config.example.yaml`) reflects this — Hunter on, Apollo off.
+
+---
+
 ## Common Gotchas
 
-- **Apollo pagination:** Free tier caps at 25 results/page and ~50 requests/hour
+- **Apollo pagination:** Free tier caps at 25 results/page and ~50 requests/hour. Apollo is currently flaky on the free tier — prefer Hunter/PDL/Maps until it's hardened.
 - **Email deduplication:** The DB deduplicates by `contact.email` — leads without emails can duplicate
-- **SQLite concurrency:** Fine for single-user local use; switch to Supabase for multi-user/cloud
+- **SQLite concurrency:** Fine for single-user local use; switch to Postgres (Neon/Supabase) for multi-user/cloud
 - **MCP server must use stdio transport:** Don't change to HTTP transport without updating Claude Desktop config
 - **Config reload:** Config is loaded once at startup; restart the MCP server after changing `config.yaml`
 
