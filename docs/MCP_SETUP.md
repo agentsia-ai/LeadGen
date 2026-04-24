@@ -45,6 +45,23 @@ Add LeadGen to the `mcpServers` section:
 }
 ```
 
+On Windows, because Claude Desktop doesn't inherit your shell's PATH, it's
+often easiest to use the venv's executable and a matching `cwd`. Replace
+`C:\\path\\to\\your\\LeadGen` with the real path to your clone (the folder
+that contains `pyproject.toml`):
+
+```json
+{
+  "mcpServers": {
+    "leadgen": {
+      "command": "C:\\path\\to\\your\\LeadGen\\.venv\\Scripts\\leadgen.exe",
+      "args": ["mcp"],
+      "cwd": "C:\\path\\to\\your\\LeadGen"
+    }
+  }
+}
+```
+
 The `cwd` matters: the MCP server resolves relative paths in `config.yaml`
 (database, imports folder, prompt overrides) from this working directory.
 
