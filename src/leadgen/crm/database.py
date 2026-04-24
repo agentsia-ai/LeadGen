@@ -169,7 +169,12 @@ class LeadDatabase:
             contact = json.loads(row[1])
             company = json.loads(row[2])
             email = contact.get("email") or None
-            full_name = contact.get("full_name") or f"{contact.get('first_name', '')} {contact.get('last_name', '')}".strip()
+            # Coerce None -> '' BEFORE f-string interpolation. Without this,
+            # `f"{None} {None}".strip()` renders the literal string "None None"
+            # which is truthy and silently groups all blank leads together.
+            first = contact.get("first_name") or ""
+            last = contact.get("last_name") or ""
+            full_name = contact.get("full_name") or f"{first} {last}".strip()
             company_name = company.get("name") or ""
             domain = company.get("domain") or company.get("website") or ""
             if email:

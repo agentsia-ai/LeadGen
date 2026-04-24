@@ -160,32 +160,18 @@ async def test_find_duplicates_groups_by_name_company_when_no_email(
 
 
 @pytest.mark.asyncio
-async def test_find_duplicates_blank_leads_currently_group_as_none_none(
+async def test_find_duplicates_ignores_leads_with_no_identifying_info(
     initialized_db: LeadDatabase,
 ) -> None:
-    """REGRESSION + KNOWN BUG: leads with no email, no full_name, no
-    first/last, no company, and no domain currently DO get grouped as
-    duplicates of each other under the bogus key
-    `name:none none|company:|domain:`.
+    """A lead without email, without name, without company, and without
+    domain cannot be safely deduped. find_duplicates must skip it rather
+    than false-positive merge unrelated blank records.
 
-    Why: `find_duplicates` builds `full_name` via
-        f"{first_name or ''} {last_name or ''}".strip()
-    but the f-string stringifies a None first/last to the literal "None",
-    yielding "None None" — a truthy string that falls into the
-    name|company|domain grouping branch.
-
-    The intended behavior (and what this test originally asserted) is
-    that fully-blank leads should be SKIPPED, not grouped. Fixing
-    requires a one-line change in `LeadDatabase.find_duplicates`
-    (use `(first_name or '') + ' ' + (last_name or '')` *before* the
-    f-string, or coerce None → '' explicitly).
-
-    TODO(engine): coerce None → '' in find_duplicates' name builder so
-    blank leads get correctly skipped. When fixed, flip this test to
-    `assert dupes == []` and rename it back to
-    `test_find_duplicates_ignores_leads_with_no_identifying_info`.
-    See NOTES.md → 'LeadGen find_duplicates email branch is unreachable
-    in practice' (and add the new entry tracking this bug)."""
+    This previously caught a bug where None first/last names rendered as
+    the literal string 'None' inside an f-string, making blank leads
+    falsely group together as `name:none none|company:|domain:`. Fixed
+    in `LeadDatabase.find_duplicates` by explicitly coercing None → ''
+    before interpolation."""
     blank1 = _lead(email=None, name="", domain=None, full_name=None)
     blank2 = _lead(email=None, name="", domain=None, full_name=None)
     blank1.contact.first_name = None
@@ -197,11 +183,7 @@ async def test_find_duplicates_blank_leads_currently_group_as_none_none(
     await initialized_db.upsert(blank2)
 
     dupes = await initialized_db.find_duplicates()
-    # Lock in the current (buggy) behavior — one group with both blank ids.
-    assert len(dupes) == 1
-    key, ids = dupes[0]
-    assert key == "name:none none|company:|domain:"
-    assert sorted(ids) == sorted([blank1.id, blank2.id])
+    assert dupes == []
 
 
 @pytest.mark.asyncio
