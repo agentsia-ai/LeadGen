@@ -5,8 +5,9 @@ Pure model logic — no async, no DB, no network.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
+from leadgen._time import now_utc
 from leadgen.models import (
     CompanyInfo,
     ContactInfo,
@@ -60,7 +61,7 @@ def test_is_contactable_requires_verified_email() -> None:
 def test_next_follow_up_step_counts_only_sent_records() -> None:
     """next_follow_up_step reflects how many outreaches have actually been
     sent — drafted-but-unsent records must not advance the sequence."""
-    now = datetime.utcnow()
+    now = now_utc()
     lead = _minimal_lead(
         outreach_history=[
             OutreachRecord(subject="draft only", body="x"),  # no sent_at

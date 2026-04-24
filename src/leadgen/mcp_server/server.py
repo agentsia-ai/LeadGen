@@ -28,6 +28,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
+from leadgen._time import now_utc
 from leadgen.ai.drafter import OutreachDrafter
 from leadgen.ai.scorer import LeadScorer
 from leadgen.config.loader import load_config, load_api_keys
@@ -315,14 +316,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=json.dumps(drafted, indent=2))]
 
     elif name == "approve_outreach":
-        from datetime import datetime
         lead = await db.get(arguments["lead_id"])
         if not lead:
             return [TextContent(type="text", text=json.dumps({"error": "Lead not found"}))]
 
         pending = [r for r in lead.outreach_history if r.approved_at is None]
         for record in pending:
-            record.approved_at = datetime.utcnow()
+            record.approved_at = now_utc()
 
         lead.touch()
         await db.upsert(lead)

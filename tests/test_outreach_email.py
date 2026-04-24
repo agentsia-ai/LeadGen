@@ -7,10 +7,9 @@ True without touching aiosmtplib. That lets us assert state transitions
 
 from __future__ import annotations
 
-from datetime import datetime
-
 import pytest
 
+from leadgen._time import now_utc
 from leadgen.crm.database import LeadDatabase
 from leadgen.models import (
     CompanyInfo,
@@ -24,7 +23,7 @@ from leadgen.outreach.email import DailyLimitReached, EmailSender
 
 
 def _approve(record: OutreachRecord) -> OutreachRecord:
-    record.approved_at = datetime.utcnow()
+    record.approved_at = now_utc()
     return record
 
 
@@ -38,7 +37,7 @@ def test_next_pending_record_returns_first_approved_unsent(
     skipping sent ones and unapproved drafts."""
     sender = EmailSender(test_config, test_keys, initialized_db, dry_run=True)
     r0 = OutreachRecord(
-        subject="sent", body="b0", sent_at=datetime.utcnow(), approved_at=datetime.utcnow()
+        subject="sent", body="b0", sent_at=now_utc(), approved_at=now_utc()
     )
     r1 = OutreachRecord(subject="draft only", body="b1")  # unapproved
     r2 = _approve(OutreachRecord(subject="approved", body="b2"))

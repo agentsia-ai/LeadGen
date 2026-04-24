@@ -12,13 +12,13 @@ Features:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Optional
 
 import aiosmtplib
 
+from leadgen._time import now_utc
 from leadgen.config.loader import APIKeys, LeadGenConfig
 from leadgen.crm.database import LeadDatabase
 from leadgen.models import Lead, LeadStatus, OutreachRecord
@@ -93,7 +93,7 @@ class EmailSender:
         )
 
         if success:
-            record.sent_at = datetime.utcnow()
+            record.sent_at = now_utc()
             lead.status = (
                 LeadStatus.CONTACTED
                 if record.sequence_step == 0
@@ -142,7 +142,7 @@ class EmailSender:
     async def handle_bounce(self, lead: Lead, email: str) -> None:
         """Mark a lead as bounced when we receive a bounce notification."""
         lead.status = LeadStatus.BOUNCED
-        lead.notes = (lead.notes + f"\nBounced: {email} on {datetime.utcnow().date()}").strip()
+        lead.notes = (lead.notes + f"\nBounced: {email} on {now_utc().date()}").strip()
         lead.touch()
         await self.db.upsert(lead)
         logger.info(f"Marked {lead.display_name} as BOUNCED")
@@ -281,7 +281,7 @@ class EmailSender:
         Call this on startup to account for sends in previous sessions today.
         """
         from leadgen.models import LeadStatus
-        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_start = now_utc().replace(hour=0, minute=0, second=0, microsecond=0)
 
         # Count leads moved to CONTACTED or FOLLOWING_UP today
         contacted = await self.db.list(status=LeadStatus.CONTACTED, limit=1000)
