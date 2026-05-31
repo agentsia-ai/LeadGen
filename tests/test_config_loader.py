@@ -18,6 +18,8 @@ def _minimal_config_dict() -> dict:
         "operator_name": "Alex",
         "operator_title": "Founder",
         "operator_email": "alex@example.com",
+        "agent_name": "Lead Gen Assistant",
+        "agent_email": "assistant@example.com",
     }
 
 
@@ -28,7 +30,11 @@ def test_load_config_reads_yaml(tmp_path: Path) -> None:
 
     cfg = load_config(cfg_path)
     assert cfg.client_name == "Example Co"
+    assert cfg.operator_name == "Alex"
+    assert cfg.operator_title == "Founder"
     assert cfg.operator_email == "alex@example.com"
+    assert cfg.agent_name == "Lead Gen Assistant"
+    assert cfg.agent_email == "assistant@example.com"
     # Safety defaults — mirrors CustComm's invariant that approval is on unless
     # explicitly disabled in the deployed config.
     assert cfg.outreach.require_approval is True

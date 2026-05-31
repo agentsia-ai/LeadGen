@@ -30,7 +30,7 @@ from mcp.types import Tool, TextContent
 
 from leadgen.ai.drafter import OutreachDrafter
 from leadgen.ai.scorer import LeadScorer
-from leadgen.config.loader import load_config, load_api_keys
+from leadgen.config.loader import display_agent_name, load_api_keys, load_config
 from leadgen.crm.database import LeadDatabase
 from leadgen.models import LeadStatus
 
@@ -193,6 +193,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         top_leads = await db.list(min_score=0.7, limit=5)
 
         summary = {
+            "agent": display_agent_name(config),
             "pipeline_counts": counts,
             "total": sum(counts.values()),
             "top_leads": [
@@ -395,7 +396,8 @@ async def main(
     db = LeadDatabase(config.database.sqlite_path)
 
     logging.basicConfig(level=logging.INFO)
-    logger.info("Starting LeadGen MCP server...")
+    agent_label = display_agent_name(config)
+    logger.info("Starting LeadGen MCP server (agent=%s)...", agent_label)
     async with stdio_server() as (read_stream, write_stream):
         await app.run(read_stream, write_stream, app.create_initialization_options())
 
