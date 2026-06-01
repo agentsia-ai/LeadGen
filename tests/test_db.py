@@ -6,11 +6,12 @@ path). No network, no shared state between tests.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import aiosqlite
 import pytest
 
+from leadgen._time import now_utc
 from leadgen.crm.database import LeadDatabase
 from leadgen.models import (
     CompanyInfo,
@@ -194,8 +195,8 @@ async def test_delete_duplicates_keeps_oldest(
     are removed."""
     older = _lead(email=None, name="DupCo", domain="dup.com", full_name="A B")
     newer = _lead(email=None, name="DupCo", domain="dup.com", full_name="A B")
-    older.created_at = datetime.utcnow() - timedelta(days=5)
-    newer.created_at = datetime.utcnow()
+    older.created_at = now_utc() - timedelta(days=5)
+    newer.created_at = now_utc()
     await initialized_db.upsert(older)
     await initialized_db.upsert(newer)
 

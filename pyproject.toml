@@ -50,8 +50,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.2.0",
-    "pytest-asyncio>=0.23.0",
+    "pytest>=9.0.0",
+    "pytest-asyncio>=1.0.0",
     "pytest-cov>=5.0.0",
     "respx>=0.21.0",
     "ruff>=0.4.0",
@@ -75,6 +75,14 @@ select = ["E", "F", "I", "N", "W", "UP"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Treat DeprecationWarning as an error so we never silently regress on
+# python-stdlib deprecations (e.g. datetime.utcnow). When a third-party
+# library starts emitting a deprecation we can't fix at our layer, add a
+# narrow `"ignore:<message regex>:DeprecationWarning:<module>"` line below
+# rather than relaxing the global rule.
+filterwarnings = [
+    "error::DeprecationWarning",
+]
 
 [tool.mypy]
 python_version = "3.12"

@@ -15,11 +15,11 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
 from pathlib import Path
 
 import anthropic
 
+from leadgen._time import now_utc
 from leadgen.config.loader import APIKeys, LeadGenConfig
 from leadgen.models import Lead, ScoringBreakdown
 
@@ -147,7 +147,7 @@ Score this lead now. Return only JSON."""
             score_data = json.loads(raw_text)
             breakdown = ScoringBreakdown(
                 **score_data,
-                scored_at=datetime.utcnow(),
+                scored_at=now_utc(),
             )
 
             logger.info(
@@ -160,7 +160,7 @@ Score this lead now. Return only JSON."""
             logger.error(f"Failed to parse Claude scoring response: {e}")
             return ScoringBreakdown(
                 reasoning=f"Scoring failed: {e}",
-                scored_at=datetime.utcnow(),
+                scored_at=now_utc(),
             )
 
     async def score_batch(

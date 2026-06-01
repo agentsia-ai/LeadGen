@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from leadgen._time import now_utc
 from leadgen.ai.drafter import OutreachDrafter
 from leadgen.models import OutreachRecord
 
@@ -70,7 +70,7 @@ async def test_draft_followup_raises_when_max_reached(
     """Once a lead has sent == max_follow_ups outreach records, calling
     draft_followup must raise rather than silently over-contact someone."""
     # test_config sets max_follow_ups=2
-    now = datetime.utcnow()
+    now = now_utc()
     sample_lead.outreach_history = [
         OutreachRecord(subject="#0", body="a", sent_at=now, sequence_step=0),
         OutreachRecord(subject="#1", body="b", sent_at=now, sequence_step=1),
@@ -91,7 +91,7 @@ async def test_draft_followup_uses_followup_system_prompt(
         OutreachRecord(
             subject="Initial",
             body="earlier body",
-            sent_at=datetime.utcnow(),
+            sent_at=now_utc(),
             sequence_step=0,
         ),
     ]

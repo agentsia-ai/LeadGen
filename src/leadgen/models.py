@@ -5,12 +5,14 @@ Central Lead model used across sources, enrichment, CRM, and outreach.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from leadgen._time import now_utc
 
 
 class LeadStatus(str, Enum):
@@ -81,12 +83,31 @@ class OutreachRecord(BaseModel):
     type: str = "email"          # email | linkedin | phone
     subject: Optional[str] = None
     body: str = ""
-    drafted_at: datetime = Field(default_factory=datetime.utcnow)
+    drafted_at: datetime = Field(default_factory=now_utc)
     approved_at: Optional[datetime] = None
     sent_at: Optional[datetime] = None
     opened_at: Optional[datetime] = None
     replied_at: Optional[datetime] = None
     sequence_step: int = 0       # 0 = initial, 1+ = follow-ups
+
+    # Belt-and-suspenders for the outreach_history JSON roundtrip: records
+    # written pre-migration store naive ISO strings in the outreach_json
+    # column, and Pydantic's default parser would faithfully reconstruct them
+    # as naive. That would then explode at runtime on any aware-vs-naive
+    # comparison (e.g. EmailSender.sync_sent_today vs today_start). This
+    # validator coerces every datetime field to aware UTC on construction,
+    # so legacy rows read through `OutreachRecord(**dict)` come out aware.
+    @field_validator(
+        "drafted_at", "approved_at", "sent_at", "opened_at", "replied_at",
+        mode="after",
+    )
+    @classmethod
+    def _coerce_aware_utc(cls, v: datetime | None) -> datetime | None:
+        if v is None:
+            return None
+        if v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v.astimezone(timezone.utc)
 
 
 class Lead(BaseModel):
@@ -100,8 +121,8 @@ class Lead(BaseModel):
     notes: str = ""
     tags: list[str] = []
     raw_data: dict = {}          # original API response, preserved for debugging
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=now_utc)
+    updated_at: datetime = Field(default_factory=now_utc)
 
     @property
     def display_name(self) -> str:
@@ -119,4 +140,4 @@ class Lead(BaseModel):
         return len([r for r in self.outreach_history if r.sent_at is not None])
 
     def touch(self) -> None:
-        self.updated_at = datetime.utcnow()
+        self.updated_at = now_utc()
