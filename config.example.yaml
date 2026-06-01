@@ -7,11 +7,15 @@
 # ============================================================
 
 # --- Identity ---
-# Who is sending the outreach? This is injected into prompts and signatures.
+# operator_* — human who sends cold outreach (From, Reply-To, signatures).
+# agent_* — optional agent identity for logs/MCP/pipeline metadata; set by
+# downstream persona deployments (e.g. agentsia-core). Not used on outbound mail.
 client_name: "Your Business Name"
 operator_name: "Your Name"
 operator_title: "Your Title"
 operator_email: "you@example.com"
+agent_name: ""
+agent_email: ""
 
 # --- Ideal Customer Profile (ICP) ---
 icp:

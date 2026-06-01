@@ -181,3 +181,41 @@ async def test_send_batch_stops_at_daily_limit(
     # depends on when DailyLimitReached fires — contract is: sent + failed
     # + skipped == total input.)
     assert summary["sent"] + summary["skipped"] + summary["failed"] == len(leads)
+
+
+@pytest.mark.asyncio
+async def test_send_smtp_uses_operator_email_for_from_and_reply_to(
+    test_config, test_keys, initialized_db: LeadDatabase, monkeypatch
+) -> None:
+    """From and Reply-To must use operator_email when SMTP_FROM_EMAIL is unset."""
+    captured: dict = {}
+
+    async def fake_send(msg, **kwargs):
+        captured["From"] = msg["From"]
+        captured["Reply-To"] = msg["Reply-To"]
+
+    monkeypatch.setattr("leadgen.outreach.email.aiosmtplib.send", fake_send)
+
+    test_config.operator_name = "Pat Operator"
+    test_config.operator_email = "pat@example.com"
+    test_config.agent_email = "bot@example.com"
+    test_keys.smtp_from_email = ""
+    test_keys.smtp_from_name = ""
+    test_keys.smtp_username = "user"
+    test_keys.smtp_password = "pass"
+
+    sender = EmailSender(test_config, test_keys, initialized_db, dry_run=False)
+    sender.use_sendgrid = False
+    sender.use_smtp = True
+
+    ok = await sender._send_smtp(
+        to_email="jane@acme.com",
+        to_name="Jane Doe",
+        subject="Hello",
+        body="Hi Jane",
+    )
+    assert ok is True
+    assert "pat@example.com" in captured["From"]
+    assert captured["Reply-To"] == "pat@example.com"
+    assert "bot@example.com" not in captured["From"]
+    assert "bot@example.com" not in captured["Reply-To"]

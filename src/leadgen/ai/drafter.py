@@ -222,10 +222,15 @@ Keep it very short. Add a new angle or value point. Don't be pushy."""
         return record
 
     def _format_body(self, body: str, lead: Lead) -> str:
-        """Append signature to email body."""
+        """Append signature to email body.
+
+        Signatures use operator identity only — cold outreach is sent from the
+        human operator, not the agent persona (agent_name/agent_email).
+        """
         sig = self.config.outreach.signature.format(
             operator_name=self.config.operator_name,
             operator_title=self.config.operator_title,
             operator_email=self.config.operator_email,
+            client_name=self.config.client_name,
         )
         return f"{body.strip()}\n\n{sig.strip()}" if sig else body

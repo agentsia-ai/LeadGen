@@ -329,7 +329,7 @@ def dedupe(ctx, dry_run, keep):
 def pipeline(ctx):
     """Show a summary of the current lead pipeline."""
     async def _run():
-        from leadgen.config.loader import load_config
+        from leadgen.config.loader import display_agent_name, load_config
         from leadgen.crm.database import LeadDatabase
 
         cfg = load_config(ctx.obj.get("config_path"))
@@ -338,7 +338,10 @@ def pipeline(ctx):
 
         counts = await db.count_by_status()
 
-        table = Table(title="LeadGen Pipeline", show_header=True)
+        table = Table(
+            title=f"LeadGen Pipeline ({display_agent_name(cfg)})",
+            show_header=True,
+        )
         table.add_column("Status", style="cyan")
         table.add_column("Count", justify="right", style="white")
 

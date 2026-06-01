@@ -18,8 +18,8 @@ from typing import Optional
 
 import aiosmtplib
 
+from leadgen.config.loader import APIKeys, LeadGenConfig, operator_from_email, operator_from_name
 from leadgen._time import now_utc
-from leadgen.config.loader import APIKeys, LeadGenConfig
 from leadgen.crm.database import LeadDatabase
 from leadgen.models import Lead, LeadStatus, OutreachRecord
 
@@ -186,12 +186,14 @@ class EmailSender:
         """Send via SMTP (Gmail, Outlook, custom domain, etc.)"""
         keys = self.keys
         cfg = self.config
+        from_addr = operator_from_email(cfg, keys)
+        from_name = operator_from_name(cfg, keys)
 
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
-        msg["From"] = f"{keys.smtp_from_name} <{keys.smtp_from_email}>" if keys.smtp_from_name else keys.smtp_from_email
+        msg["From"] = f"{from_name} <{from_addr}>" if from_name else from_addr
         msg["To"] = f"{to_name} <{to_email}>"
-        msg["Reply-To"] = keys.smtp_from_email
+        msg["Reply-To"] = from_addr
 
         # Plain text version
         msg.attach(MIMEText(body, "plain"))
@@ -234,8 +236,10 @@ class EmailSender:
             from sendgrid.helpers.mail import Mail, Content, To
 
             sg = sendgrid.SendGridAPIClient(api_key=self.keys.sendgrid)
+            from_addr = operator_from_email(self.config, self.keys)
+            from_name = operator_from_name(self.config, self.keys)
             message = Mail(
-                from_email=(self.keys.smtp_from_email, self.keys.smtp_from_name or self.config.operator_name),
+                from_email=(from_addr, from_name),
                 to_emails=To(to_email, to_name),
                 subject=subject,
             )

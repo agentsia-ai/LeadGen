@@ -92,6 +92,8 @@ class LeadGenConfig(BaseModel):
     operator_name: str
     operator_title: str
     operator_email: str
+    agent_name: str = ""
+    agent_email: str = ""
     icp: ICPConfig = ICPConfig()
     value_prop: ValuePropConfig = ValuePropConfig()
     outreach: OutreachConfig = OutreachConfig()
@@ -127,6 +129,31 @@ class APIKeys(BaseModel):
 
 
 # ── Loader ────────────────────────────────────────────────────────────────────
+
+
+def display_agent_name(config: LeadGenConfig) -> str:
+    """Agent-facing label for logs, MCP, and pipeline reports.
+
+    Productized deployments (e.g. agentsia-core) set config.agent_name.
+    Standalone LeadGen installs fall back to the engine name.
+    """
+    name = (config.agent_name or "").strip()
+    return name or "leadgen"
+
+
+def operator_from_email(config: LeadGenConfig, keys: APIKeys) -> str:
+    """From/Reply-To address for outbound mail — human operator only.
+
+    Cold outreach is sent from the operator (e.g. robert@…), never agent_email.
+    SMTP_FROM_EMAIL in .env overrides when set for mailbox routing.
+    """
+    return (keys.smtp_from_email or config.operator_email).strip()
+
+
+def operator_from_name(config: LeadGenConfig, keys: APIKeys) -> str:
+    """Display name on the From header — human operator, not the agent persona."""
+    return (keys.smtp_from_name or config.operator_name).strip()
+
 
 def load_config(config_path: str | Path | None = None) -> LeadGenConfig:
     """Load and validate client config from YAML file."""
