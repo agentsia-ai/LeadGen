@@ -13,7 +13,12 @@ import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, field_validator
 
-load_dotenv()
+# .env is an OPTIONAL local-dev convenience, never required. In production
+# secrets are injected as real environment variables (e.g. via Doppler), so we
+# must not let a local .env clobber them: override=False means any value already
+# present in os.environ wins. If no .env file exists this is a harmless no-op and
+# keys are read straight from the process environment.
+load_dotenv(override=False)
 
 
 # ── Pydantic models for config validation ────────────────────────────────────

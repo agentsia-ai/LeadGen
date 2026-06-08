@@ -136,7 +136,10 @@ class HunterConnector:
             department: Filter by dept: ["executive", "it", "finance", "management", "sales", "legal"]
         """
         if not self.api_key:
-            raise ValueError("HUNTER_API_KEY is not set. Add it to your .env file.")
+            raise ValueError(
+                "HUNTER_API_KEY is not set. Provide it as an environment variable "
+                "(set it in Doppler for production, or a local .env for development)."
+            )
 
         params: dict = {"domain": domain, "limit": limit}
         if seniority:
