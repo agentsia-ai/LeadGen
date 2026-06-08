@@ -122,7 +122,10 @@ class ApolloConnector:
             List of Lead objects.
         """
         if not self.api_key:
-            raise ValueError("APOLLO_API_KEY is not set. Add it to your .env file.")
+            raise ValueError(
+                "APOLLO_API_KEY is not set. Provide it as an environment variable "
+                "(set it in Doppler for production, or a local .env for development)."
+            )
 
         leads: list[Lead] = []
         per_page = min(limit, 25)   # Apollo max per page is 25 on free tier

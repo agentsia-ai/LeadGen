@@ -68,7 +68,7 @@ def search(ctx, limit, source, domain):
                 console.print("[red]X[/red] Hunter domain search requires --domain (e.g. --domain acmecorp.com)")
                 return
             if not keys.hunter:
-                console.print("[red]X[/red] HUNTER_API_KEY is not set. Add it to your .env file.")
+                console.print("[red]X[/red] HUNTER_API_KEY is not set. Set it in Doppler (production) or a local .env (development).")
                 return
             if not cfg.sources.hunter.get("enabled", False):
                 console.print("[yellow]![/yellow] Hunter is disabled in config. Set sources.hunter.enabled: true")
@@ -78,7 +78,7 @@ def search(ctx, limit, source, domain):
                     leads = await hunter.domain_search(domain=domain, limit=limit)
         elif use_pdl:
             if not keys.pdl:
-                console.print("[red]X[/red] PDL_API_KEY is not set. Add it to your .env file.")
+                console.print("[red]X[/red] PDL_API_KEY is not set. Set it in Doppler (production) or a local .env (development).")
                 return
             if not cfg.sources.pdl.get("enabled", False):
                 console.print("[yellow]![/yellow] PDL is disabled in config. Set sources.pdl.enabled: true")
@@ -88,7 +88,7 @@ def search(ctx, limit, source, domain):
                     leads = await pdl.search(limit=limit)
         else:
             if not keys.apollo:
-                console.print("[red]X[/red] APOLLO_API_KEY is not set. Add it to your .env file.")
+                console.print("[red]X[/red] APOLLO_API_KEY is not set. Set it in Doppler (production) or a local .env (development).")
                 return
             if not cfg.sources.apollo.get("enabled", False):
                 console.print("[yellow]![/yellow] Apollo is disabled in config. Set sources.apollo.enabled: true")
@@ -212,7 +212,7 @@ def enrich(ctx, limit):
         cfg = load_config(ctx.obj.get("config_path"))
         keys = load_api_keys()
         if not keys.hunter:
-            console.print("[red]X[/red] HUNTER_API_KEY is not set. Add it to your .env file.")
+            console.print("[red]X[/red] HUNTER_API_KEY is not set. Set it in Doppler (production) or a local .env (development).")
             return
 
         db = LeadDatabase(cfg.database.sqlite_path)
@@ -405,7 +405,7 @@ def apollo_test(ctx):
 
         keys = load_api_keys()
         if not keys.apollo:
-            console.print("[red]X[/red] APOLLO_API_KEY is not set in .env")
+            console.print("[red]X[/red] APOLLO_API_KEY is not set. Set it in Doppler (production) or a local .env (development).")
             return
 
         try:
@@ -440,7 +440,7 @@ def smtp_test(ctx):
         keys = load_api_keys()
 
         if not keys.smtp_host or not keys.smtp_username or not keys.smtp_password:
-            console.print("[red]X[/red] SMTP not configured. Add SMTP_HOST, SMTP_USERNAME, and SMTP_PASSWORD to .env")
+            console.print("[red]X[/red] SMTP not configured. Set SMTP_HOST, SMTP_USERNAME, and SMTP_PASSWORD as environment variables (Doppler in production, or a local .env in development).")
             console.print("See docs/SMTP_SETUP.md for Gmail setup instructions.")
             return
 

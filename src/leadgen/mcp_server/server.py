@@ -248,17 +248,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             if not domain:
                 return [TextContent(type="text", text=json.dumps({"error": "Hunter requires domain parameter"}))]
             if not keys.hunter:
-                return [TextContent(type="text", text=json.dumps({"error": "HUNTER_API_KEY is not set. Add it to .env"}))]
+                return [TextContent(type="text", text=json.dumps({"error": "HUNTER_API_KEY is not set. Provide it as an environment variable (set it in Doppler for production, or a local .env for development)."}))]
             async with HunterConnector(config, keys) as hunter:
                 leads = await hunter.domain_search(domain=domain, limit=limit)
         elif use_pdl:
             if not keys.pdl:
-                return [TextContent(type="text", text=json.dumps({"error": "PDL_API_KEY is not set. Add it to .env"}))]
+                return [TextContent(type="text", text=json.dumps({"error": "PDL_API_KEY is not set. Provide it as an environment variable (set it in Doppler for production, or a local .env for development)."}))]
             async with PDLConnector(config, keys) as pdl:
                 leads = await pdl.search(limit=limit)
         else:
             if not keys.apollo:
-                return [TextContent(type="text", text=json.dumps({"error": "APOLLO_API_KEY is not set. Add it to .env"}))]
+                return [TextContent(type="text", text=json.dumps({"error": "APOLLO_API_KEY is not set. Provide it as an environment variable (set it in Doppler for production, or a local .env for development)."}))]
             async with ApolloConnector(config, keys) as apollo:
                 leads = await apollo.search(limit=limit)
 
