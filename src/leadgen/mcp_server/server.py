@@ -268,9 +268,32 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             if is_new:
                 added += 1
 
+        # Echo back a preview of the records THIS call actually fetched so the
+        # result can be verified at a glance — without having to re-query the
+        # DB (where older, higher-scored leads sort to the top and can be
+        # mistaken for the fresh pull).
+        preview = [
+            {
+                "name": lead.display_name,
+                "company": lead.company.name,
+                "title": lead.contact.title,
+                "industry": lead.company.industry,
+                "location": ", ".join(p for p in (lead.company.city, lead.company.state) if p) or None,
+                "email": lead.contact.email,
+                "email_verified": lead.contact.email_verified,
+                "source": lead.source.value,
+            }
+            for lead in leads[:10]
+        ]
+
         return [TextContent(
             type="text",
-            text=json.dumps({"fetched": len(leads), "new_leads_added": added})
+            text=json.dumps({
+                "source": src or ("hunter" if domain else "apollo"),
+                "fetched": len(leads),
+                "new_leads_added": added,
+                "preview": preview,
+            }, indent=2)
         )]
 
     elif name == "score_leads":
