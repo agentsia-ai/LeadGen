@@ -230,6 +230,38 @@ class PDLConnector:
         first = phones[0]
         return first.get("number", first) if isinstance(first, dict) else first
 
+    @staticmethod
+    def _normalize_domain(value: str | None) -> str | None:
+        """Strip protocol / www / path off a raw URL or domain → bare host.
+
+        Returns None for blanks. Mirrors HunterConnector._normalize_domain so a
+        domain captured here feeds straight into Hunter without re-cleaning.
+        """
+        if not value or not isinstance(value, str):
+            return None
+        value = value.strip().lower()
+        for prefix in ("https://", "http://", "www."):
+            if value.startswith(prefix):
+                value = value[len(prefix):]
+        value = value.split("/")[0]
+        # Reject obviously non-domain values (PDL sometimes echoes a bare
+        # company name into website on partial records).
+        return value if value and "." in value else None
+
+    def _company_domain(self, person: dict) -> str | None:
+        """Pull a usable company domain from whatever PDL actually returned.
+
+        PDL's person schema only carries a real domain in `job_company_website`
+        (free tier frequently nulls it). We still check a couple of historical
+        aliases defensively. LinkedIn/Facebook/Twitter URLs are NOT domains and
+        are intentionally ignored here — name->domain resolution is Hunter's job.
+        """
+        for field in ("job_company_website", "job_company_domain", "company_website"):
+            domain = self._normalize_domain(person.get(field))
+            if domain:
+                return domain
+        return None
+
     def _parse_person(self, person: dict) -> Lead:
         """Map PDL person record → Lead model.
 
@@ -269,10 +301,15 @@ class PDLConnector:
             phone=self._safe_phone(person.get("mobile_phone") or self._first_phone(person.get("phone_numbers"))),
         )
 
+        domain = self._company_domain(person)
+        # Preserve the original website string if present (it may carry a path
+        # we want for display), but always store a clean bare host in `domain`
+        # so Hunter enrichment has something canonical to search against.
+        website = person.get("job_company_website") or (f"https://{domain}" if domain else None)
         comp_info = CompanyInfo(
             name=person.get("job_company_name", "Unknown"),
-            domain=person.get("job_company_website"),
-            website=person.get("job_company_website"),
+            domain=domain,
+            website=website,
             industry=person.get("job_company_industry"),
             employee_count=emp_count,
             city=person.get("job_company_location_locality"),

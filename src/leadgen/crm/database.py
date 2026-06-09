@@ -61,8 +61,40 @@ class LeadDatabase:
             await db.commit()
         logger.info(f"Database initialized: {self.db_path}")
 
-    async def upsert(self, lead: Lead) -> bool:
-        """Insert or update a lead. Returns True if new, False if updated."""
+    @staticmethod
+    def _identity_key(contact: dict, company: dict) -> str | None:
+        """Compute a dedupe key for a lead from its contact/company dicts.
+
+        Prefers email when present; otherwise falls back to a
+        name + company + domain composite. Returns None when there's no
+        identifying info (so blank records are never grouped together).
+
+        Shared by `upsert` (insert-time dedupe) and `find_duplicates`
+        (one-time cleanup) so both use exactly the same notion of identity.
+        """
+        email = contact.get("email") or None
+        if email:
+            return f"email:{email.lower().strip()}"
+        first = contact.get("first_name") or ""
+        last = contact.get("last_name") or ""
+        full_name = contact.get("full_name") or f"{first} {last}".strip()
+        company_name = company.get("name") or ""
+        domain = company.get("domain") or company.get("website") or ""
+        if full_name or company_name or domain:
+            return f"name:{full_name.lower()}|company:{company_name.lower()}|domain:{domain.lower()}"
+        return None
+
+    async def upsert(self, lead: Lead, dedupe_on_identity: bool = False) -> bool:
+        """Insert or update a lead. Returns True if new, False if updated.
+
+        By default, dedupe is by id then by email. Pass
+        ``dedupe_on_identity=True`` (used by the fetch-new-leads paths) to also
+        collapse email-less leads onto an existing record sharing the same
+        name+company+domain identity key — this stops repeated PDL pulls (which
+        return null emails on the free tier) from stacking duplicate rows.
+        Kept opt-in so the dedupe-cleanup helpers can still be exercised against
+        deliberately-duplicated rows.
+        """
         async with aiosqlite.connect(self.db_path) as db:
             # Check for existing: by id first (e.g. lead loaded from DB, enriched), then by email
             existing = None
@@ -73,6 +105,28 @@ class LeadDatabase:
                     "SELECT id FROM leads WHERE contact_email = ?", (lead.contact.email,)
                 ) as cur:
                     existing = await cur.fetchone()
+            # Email-less leads (e.g. PDL free tier) won't match on id or email,
+            # so repeated pulls used to stack duplicate rows. Fall back to a
+            # name+company identity key so the same person at the same company
+            # collapses onto the existing record instead.
+            if dedupe_on_identity and not existing and not lead.contact.email:
+                new_key = self._identity_key(
+                    lead.contact.model_dump(), lead.company.model_dump()
+                )
+                if new_key:
+                    async with db.execute(
+                        "SELECT id, contact_json, company_json FROM leads "
+                        "WHERE contact_email IS NULL AND company_name = ?",
+                        (lead.company.name,),
+                    ) as cur:
+                        candidates = await cur.fetchall()
+                    for cand_id, contact_json, company_json in candidates:
+                        cand_key = self._identity_key(
+                            json.loads(contact_json), json.loads(company_json)
+                        )
+                        if cand_key == new_key:
+                            existing = (cand_id,)
+                            break
 
             row = (
                 lead.id,
@@ -169,20 +223,8 @@ class LeadDatabase:
             lead_id = row[0]
             contact = json.loads(row[1])
             company = json.loads(row[2])
-            email = contact.get("email") or None
-            # Coerce None -> '' BEFORE f-string interpolation. Without this,
-            # `f"{None} {None}".strip()` renders the literal string "None None"
-            # which is truthy and silently groups all blank leads together.
-            first = contact.get("first_name") or ""
-            last = contact.get("last_name") or ""
-            full_name = contact.get("full_name") or f"{first} {last}".strip()
-            company_name = company.get("name") or ""
-            domain = company.get("domain") or company.get("website") or ""
-            if email:
-                key = f"email:{email.lower().strip()}"
-            elif full_name or company_name or domain:
-                key = f"name:{full_name.lower()}|company:{company_name.lower()}|domain:{domain.lower()}"
-            else:
+            key = self._identity_key(contact, company)
+            if not key:
                 continue  # No identifying info, skip (can't safely dedupe)
             key_to_ids.setdefault(key, []).append(lead_id)
         return [(k, ids) for k, ids in key_to_ids.items() if len(ids) > 1]

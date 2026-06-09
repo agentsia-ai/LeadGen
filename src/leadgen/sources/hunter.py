@@ -93,6 +93,96 @@ class HunterConnector:
         logger.debug(f"Hunter confidence too low ({confidence}) for {first_name} {last_name} @ {domain}")
         return None
 
+    async def find_company_domain(self, company_name: str) -> Optional[str]:
+        """Resolve a company NAME to its primary domain via Hunter.
+
+        Hunter's /domain-search endpoint accepts a `company` parameter (instead
+        of `domain`) and echoes back the resolved `data.domain`. We request a
+        single email row to keep the response (and credit cost) minimal — we
+        only care about the domain Hunter mapped the name to.
+
+        Returns the bare domain (e.g. "acmecorp.com") or None.
+        """
+        if not self.api_key or not company_name:
+            return None
+
+        try:
+            data = await self._get("/domain-search", {"company": company_name, "limit": 1})
+        except httpx.HTTPStatusError as e:
+            logger.debug(f"Hunter company->domain lookup failed for '{company_name}': {e.response.status_code}")
+            return None
+
+        domain = (data.get("data") or {}).get("domain")
+        resolved = self._normalize_domain(domain)
+        if resolved:
+            logger.debug(f"Hunter resolved company '{company_name}' -> {resolved}")
+        return resolved
+
+    @staticmethod
+    def _derive_domain_from_name(company_name: str | None) -> Optional[str]:
+        """Last-resort guess: turn a company name into a likely .com domain.
+
+        Strips common legal/structural suffixes and non-alphanumerics, e.g.
+        "Acme Roofing, LLC" -> "acmeroofing.com". This is a heuristic and may be
+        wrong; callers should surface that the domain was guessed.
+        """
+        if not company_name:
+            return None
+        import re
+
+        name = company_name.lower()
+        # Drop trailing legal/structural suffixes (one or more, e.g. "co llc").
+        stop_words = {"inc", "llc", "ltd", "corp", "corporation", "co", "company",
+                      "group", "the", "and", "&", "plc", "pllc", "lp"}
+        tokens = [t for t in re.split(r"[^a-z0-9]+", name) if t and t not in stop_words]
+        slug = "".join(tokens)
+        return f"{slug}.com" if slug else None
+
+    async def resolve_company_domain_with_source(self, lead: "Lead") -> tuple[Optional[str], str]:
+        """Resolve a domain for a lead and report HOW it was resolved.
+
+        Resolution order (cheapest / most reliable first):
+          1. "lead"    — domain already on the lead (PDL/Apollo/CSV); no API call.
+          2. "hunter"  — Hunter name->domain lookup (/domain-search?company=).
+          3. "derived" — lightweight guess from the company name (unverified).
+          4. None / "none" — nothing resolvable.
+
+        Persists the resolved domain onto `lead.company.domain`. Returns a
+        (domain, source) tuple.
+        """
+        existing = self._normalize_domain(lead.company.domain or lead.company.website)
+        if existing:
+            if not lead.company.domain:
+                lead.company.domain = existing
+            return existing, "lead"
+
+        name = lead.company.name
+        if not name or name.strip().lower() in ("", "unknown"):
+            return None, "none"
+
+        resolved = await self.find_company_domain(name)
+        if resolved:
+            lead.company.domain = resolved
+            lead.touch()
+            return resolved, "hunter"
+
+        derived = self._derive_domain_from_name(name)
+        if derived:
+            lead.company.domain = derived
+            lead.touch()
+            return derived, "derived"
+
+        return None, "none"
+
+    async def resolve_company_domain(self, lead: "Lead") -> Optional[str]:
+        """Resolve (and persist) the best domain to feed email-finding.
+
+        Thin wrapper over `resolve_company_domain_with_source` for callers that
+        don't care how the domain was found (e.g. the CLI enrich path).
+        """
+        domain, _ = await self.resolve_company_domain_with_source(lead)
+        return domain
+
     async def verify_email(self, email: str) -> bool:
         """
         Verify whether an email address is deliverable.
@@ -177,17 +267,26 @@ class HunterConnector:
 
     # ── Enrichment Helper ─────────────────────────────────────────────────────
 
-    async def enrich_lead_email(self, lead: "Lead") -> "Lead":
+    async def enrich_lead_email(self, lead: "Lead", resolve_domain: bool = False) -> "Lead":
         """
         Attempt to find and verify an email for a lead that doesn't have one.
         Mutates the lead in place if an email is found.
+
+        When ``resolve_domain`` is True and the lead has no domain, attempts to
+        resolve one first (Hunter name->domain, then a derived guess) — this may
+        make an extra network call. When False (default), only a domain already
+        present on the lead is used, so callers that have pre-resolved the domain
+        (e.g. the MCP enrich tool) don't pay for resolution twice.
 
         Returns the (possibly updated) lead.
         """
         if lead.contact.email and lead.contact.email_verified:
             return lead  # already has a verified email
 
-        domain = self._normalize_domain(lead.company.domain or lead.company.website)
+        if resolve_domain:
+            domain = await self.resolve_company_domain(lead)
+        else:
+            domain = self._normalize_domain(lead.company.domain or lead.company.website)
         first = lead.contact.first_name
         last = lead.contact.last_name
 
@@ -215,7 +314,7 @@ class HunterConnector:
         import asyncio
         enriched = []
         for i, lead in enumerate(leads):
-            enriched_lead = await self.enrich_lead_email(lead)
+            enriched_lead = await self.enrich_lead_email(lead, resolve_domain=True)
             enriched.append(enriched_lead)
             # Small delay to be kind to Hunter's rate limits
             if i > 0 and i % 10 == 0:
