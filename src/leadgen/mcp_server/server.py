@@ -116,6 +116,36 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="enrich_lead",
+            description=(
+                "Find and verify a deliverable email for existing lead(s) via Hunter. "
+                "Resolves the company domain first (uses any domain PDL provided, else "
+                "Hunter name->domain, else a derived guess), then runs Hunter "
+                "email-finder (>=70 confidence) + email-verifier and writes the result "
+                "back onto the SAME lead record. REQUIRED before outreach since PDL's "
+                "free tier returns no email. Pass lead_id or lead_ids; keep batches small "
+                "(1-2) to conserve Hunter credits."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "lead_id": {
+                        "type": "string",
+                        "description": "A single lead ID to enrich.",
+                    },
+                    "lead_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Multiple lead IDs to enrich in one call.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "If neither lead_id nor lead_ids is given, enrich up to this many leads that still lack a verified email (default 2).",
+                    },
+                },
+            },
+        ),
+        Tool(
             name="score_leads",
             description="Run AI scoring on unscored leads in the database.",
             inputSchema={
@@ -264,7 +294,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
         added = 0
         for lead in leads:
-            is_new = await db.upsert(lead)
+            is_new = await db.upsert(lead, dedupe_on_identity=True)
             if is_new:
                 added += 1
 
@@ -295,6 +325,89 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 "preview": preview,
             }, indent=2)
         )]
+
+    elif name == "enrich_lead":
+        from leadgen.sources.hunter import HunterConnector
+
+        if not keys.hunter:
+            return [TextContent(type="text", text=json.dumps({
+                "error": "HUNTER_API_KEY is not set. Provide it as an environment variable (set it in Doppler for production, or a local .env for development)."
+            }))]
+
+        # Resolve target lead ids: explicit id(s), else fall back to leads that
+        # still lack a verified email (small default batch to save credits).
+        limit = arguments.get("limit", 2)
+        ids: list[str] = []
+        if arguments.get("lead_id"):
+            ids.append(arguments["lead_id"])
+        if arguments.get("lead_ids"):
+            ids.extend(arguments["lead_ids"])
+        if not ids:
+            candidates = await db.list(limit=max(limit * 5, 10))
+            ids = [
+                l.id for l in candidates
+                if not (l.contact.email and l.contact.email_verified)
+            ][:limit]
+
+        results = []
+        async with HunterConnector(config, keys) as hunter:
+            for lead_id in ids:
+                lead = await db.get(lead_id)
+                if not lead:
+                    results.append({"lead_id": lead_id, "status": "not_found",
+                                    "reason": "no lead with that id"})
+                    continue
+
+                company = lead.company.name or "unknown company"
+                if lead.contact.email and lead.contact.email_verified:
+                    results.append({
+                        "lead_id": lead.id, "name": lead.display_name, "company": company,
+                        "email": lead.contact.email, "email_verified": True,
+                        "status": "already_verified",
+                    })
+                    continue
+
+                domain, source = await hunter.resolve_company_domain_with_source(lead)
+                if not domain:
+                    await db.upsert(lead)  # nothing changed, but keep record consistent
+                    results.append({
+                        "lead_id": lead.id, "name": lead.display_name, "company": company,
+                        "status": "no_domain",
+                        "reason": f"no domain resolvable for {company}",
+                    })
+                    continue
+
+                # Reuse the engine's find+verify path; domain is already set on
+                # the lead, so this consumes no extra name->domain credit.
+                await hunter.enrich_lead_email(lead)
+
+                if lead.contact.email:
+                    lead.status = LeadStatus.ENRICHED
+                    lead.touch()
+                    await db.upsert(lead)
+                    results.append({
+                        "lead_id": lead.id, "name": lead.display_name, "company": company,
+                        "domain": domain, "domain_source": source,
+                        "email": lead.contact.email,
+                        "email_verified": lead.contact.email_verified,
+                        "status": "enriched" if lead.contact.email_verified else "found_unverified",
+                    })
+                else:
+                    # Persist the resolved domain even when no email was found,
+                    # so a later retry doesn't re-pay for domain resolution.
+                    await db.upsert(lead)
+                    results.append({
+                        "lead_id": lead.id, "name": lead.display_name, "company": company,
+                        "domain": domain, "domain_source": source,
+                        "status": "no_email",
+                        "reason": f"no Hunter match >=70 confidence for {lead.display_name} at {domain}",
+                    })
+
+        return [TextContent(type="text", text=json.dumps({
+            "enriched": sum(1 for r in results if r.get("email_verified")),
+            "processed": len(results),
+            "results": results,
+        }, indent=2))]
 
     elif name == "score_leads":
         limit = arguments.get("limit", 20)

@@ -99,7 +99,7 @@ def search(ctx, limit, source, domain):
 
         added = 0
         for lead in leads:
-            is_new = await db.upsert(lead)
+            is_new = await db.upsert(lead, dedupe_on_identity=True)
             if is_new:
                 added += 1
 
