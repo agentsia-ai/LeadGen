@@ -324,6 +324,43 @@ def dedupe(ctx, dry_run, keep):
     asyncio.run(_run())
 
 
+@main.command("purge")
+@click.option("--yes", is_flag=True, help="Skip the confirmation prompt (for scripted use).")
+@click.pass_context
+def purge(ctx, yes):
+    """Delete ALL leads from the active database. Destructive and irreversible.
+
+    CLI-only by design: this is intentionally NOT exposed as an MCP tool so the
+    agent can never wipe the database on its own.
+    """
+    async def _run():
+        from leadgen.config.loader import load_config
+        from leadgen.crm.database import LeadDatabase
+
+        cfg = load_config(ctx.obj.get("config_path"))
+        db = LeadDatabase(cfg.database.sqlite_path)
+        await db.init()
+
+        count = await db.count_all()
+        if count == 0:
+            console.print("[yellow]No leads to purge — the database is already empty.[/yellow]")
+            return
+
+        if not yes:
+            console.print(
+                f"[bold red]About to delete all {count} leads[/bold red] from "
+                f"[cyan]{cfg.database.sqlite_path}[/cyan]. This cannot be undone."
+            )
+            if not click.confirm("Are you sure you want to purge every lead?"):
+                console.print("[yellow]Aborted. No leads were deleted.[/yellow]")
+                return
+
+        deleted = await db.delete_all()
+        console.print(f"[green]OK[/green] Purged {deleted} leads from the database.")
+
+    asyncio.run(_run())
+
+
 @main.command()
 @click.pass_context
 def pipeline(ctx):

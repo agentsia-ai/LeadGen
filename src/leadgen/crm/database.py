@@ -251,6 +251,28 @@ class LeadDatabase:
             await db.commit()
         return deleted
 
+    async def count_all(self) -> int:
+        """Return the total number of leads in the table."""
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute("SELECT COUNT(*) FROM leads") as cur:
+                row = await cur.fetchone()
+                return row[0] if row else 0
+
+    async def delete_all(self) -> int:
+        """Delete every lead from the table. Returns the number of rows removed.
+
+        Destructive and irreversible — intended for the CLI `purge` command,
+        which gates it behind an interactive confirmation. Deliberately not
+        exposed as an MCP tool so the agent can never call it.
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute("SELECT COUNT(*) FROM leads") as cur:
+                row = await cur.fetchone()
+                count = row[0] if row else 0
+            await db.execute("DELETE FROM leads")
+            await db.commit()
+            return count
+
     async def count_by_status(self) -> dict[str, int]:
         """Return lead counts grouped by status."""
         async with aiosqlite.connect(self.db_path) as db:
