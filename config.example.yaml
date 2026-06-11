@@ -19,11 +19,15 @@ agent_email: ""
 
 # --- Ideal Customer Profile (ICP) ---
 icp:
-  # Industries to target (use plain English, as many or as few as you like)
+  # Industries to target. For the PDL source these must resolve to PDL's fixed,
+  # LinkedIn-derived taxonomy (147 values) — either use an exact PDL value or a
+  # label mapped in leadgen/sources/pdl_industries.py (ICP_INDUSTRY_ALIASES).
+  # Invalid terms FAIL LOUDLY (they used to silently 404 and disable industry
+  # targeting). Valid values: https://docs.peopledatalabs.com/docs/industries
   industries:
-    - "industry one"
-    - "industry two"
-    - "industry three"
+    - "computer software"   # exact PDL value
+    - "financial services"  # exact PDL value
+    - "marketing agencies"  # alias -> marketing and advertising
 
   # Company size range (employees)
   company_size:
