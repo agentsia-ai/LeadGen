@@ -177,7 +177,21 @@ def load_config(config_path: str | Path | None = None) -> LeadGenConfig:
     if "scoring_threshold" in raw:
         raw.setdefault("scoring", {})["scoring_threshold"] = raw.pop("scoring_threshold")
 
-    return LeadGenConfig(**raw)
+    config = LeadGenConfig(**raw)
+
+    # Anchor a relative SQLite path to the *config file's* directory rather than
+    # the process working directory. A bare "./data/leadgen.db" otherwise lands
+    # under whatever cwd the engine happened to be launched from (Claude Desktop
+    # with no cwd, a manual run from a parent repo, ...), which silently creates
+    # a second DB and splits the data. Anchoring to the config dir keeps the DB
+    # beside the config that selected it (agents/rex/config.yaml ->
+    # agents/rex/data/leadgen.db) regardless of cwd. An already-absolute path
+    # (e.g. one the agentsia-core launcher pre-resolved) is left untouched.
+    sqlite_path = Path(config.database.sqlite_path)
+    if not sqlite_path.is_absolute():
+        config.database.sqlite_path = str((path.resolve().parent / sqlite_path).resolve())
+
+    return config
 
 
 def load_api_keys() -> APIKeys:
