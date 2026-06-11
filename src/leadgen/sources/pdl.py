@@ -15,6 +15,7 @@ from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wai
 
 from leadgen.config.loader import APIKeys, LeadGenConfig
 from leadgen.models import CompanyInfo, ContactInfo, Lead, LeadSource
+from leadgen.sources.pdl_industries import BROADER_THAN_LABEL, validate_and_resolve
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,10 @@ class PDLConnector:
     def __init__(self, config: LeadGenConfig, keys: APIKeys):
         self.config = config
         self.api_key = keys.pdl
+        # Set True only when an explicit opt-in industry relaxation actually
+        # fires, so every Lead parsed afterwards is flagged industry_relaxed.
+        self._industry_relaxed = False
+        self._industry_terms: list[str] | None = None
         self.client = httpx.AsyncClient(
             base_url=PDL_BASE_URL,
             headers={
@@ -50,6 +55,31 @@ class PDLConnector:
         """Map config country to PDL lowercase value."""
         c = country.strip().lower()
         return COUNTRY_ALIASES.get(c, c.replace(" ", "_"))
+
+    def _pdl_industry_terms(self) -> list[str]:
+        """Resolve configured ICP industries to valid PDL taxonomy values.
+
+        Validates EVERY configured industry against PDL's fixed vocabulary
+        (via the mapping layer) and FAILS LOUDLY on any term that isn't a
+        canonical value or a known alias. This runs before any query is sent
+        so an invalid term can never silently 404 into a broadened search.
+
+        Result is cached for the lifetime of the connector. Raises
+        InvalidIndustryError (a ValueError) on the first invalid term.
+        """
+        if self._industry_terms is None:
+            self._industry_terms = validate_and_resolve(self.config.icp.industries)
+            for label in self.config.icp.industries:
+                caveat = BROADER_THAN_LABEL.get(label.strip().lower())
+                if caveat:
+                    logger.warning(
+                        "PDL industry %r maps to a BROADER taxonomy value: %s. "
+                        "The industry filter alone can't isolate this sub-segment - "
+                        "narrow with company size and keyword/title filters.",
+                        label,
+                        caveat,
+                    )
+        return self._industry_terms
 
     def _build_es_query(
         self,
@@ -84,10 +114,17 @@ class PDLConnector:
         hi = size_cfg.get("max_employees", 10000)
         must.append({"range": {"job_company_employee_count": {"gte": lo, "lte": hi}}})
 
-        # Industry keywords — single match on first industry (PDL restricts query options)
+        # Industry — exact match against PDL's canonical taxonomy. job_company_industry
+        # is a keyword enum, so we use term/terms (exact), not full-text match, and
+        # we query ALL configured industries (resolved to valid PDL values), not just
+        # the first. Terms are pre-validated in search(); skip_industry is only set by
+        # an explicit, opt-in relaxation.
         if icp.industries and not skip_industry:
-            industry_query = icp.industries[0].lower()
-            must.append({"match": {"job_company_industry": industry_query}})
+            terms = self._pdl_industry_terms()
+            if len(terms) == 1:
+                must.append({"term": {"job_company_industry": terms[0]}})
+            elif terms:
+                must.append({"terms": {"job_company_industry": terms}})
 
         # Prefer records with email (free tier may not return value, but structure exists)
         must.append({"exists": {"field": "emails"}})
@@ -130,6 +167,7 @@ class PDLConnector:
         self,
         limit: int = 50,
         extra_filters: dict | None = None,
+        relax_industry: bool = False,
     ) -> list[Lead]:
         """
         Search PDL for leads matching the configured ICP.
@@ -137,8 +175,16 @@ class PDLConnector:
         Note: Each returned person consumes 1 credit. Free tier = 100 credits/month.
 
         Args:
-            limit:         Max number of leads to return.
+            limit:          Max number of leads to return.
             extra_filters:  Additional ES query filters (must clauses).
+            relax_industry: Opt-in escape hatch. When False (the default), an
+                            industry query that matches nothing FAILS CLOSED:
+                            we return an empty list rather than silently dropping
+                            the industry filter and returning off-vertical leads.
+                            When True, we explicitly broaden (geography + size
+                            only) AND flag every returned Lead with
+                            ``industry_relaxed=True`` so relaxed results can't be
+                            mistaken for on-vertical matches.
 
         Returns:
             List of Lead objects.
@@ -149,11 +195,16 @@ class PDLConnector:
                 "(set it in Doppler for production, or a local .env for development)."
             )
 
+        # Validate industries up front (FAIL LOUDLY before spending any credits).
+        # An invalid term raises here instead of 404-ing into a broadened search.
+        if self.config.icp.industries:
+            self._pdl_industry_terms()
+
         leads: list[Lead] = []
         size = min(limit, 100)
         scroll_token: str | None = None
 
-        skip_industry = False  # Set True on 404 fallback
+        skip_industry = False  # Only set True by an explicit opt-in relaxation
         while len(leads) < limit:
             payload = self._build_es_query(
                 size=min(size, limit - len(leads)),
@@ -171,11 +222,33 @@ class PDLConnector:
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 404:
                     if not skip_industry and self.config.icp.industries:
-                        # Fallback: retry without industry filter (PDL taxonomy may differ)
-                        skip_industry = True
-                        scroll_token = None  # Reset for new search
-                        logger.info("PDL: No results with industry filter. Retrying with broader query (geography + size only)...")
-                        continue
+                        if relax_industry:
+                            # EXPLICIT opt-in only: broaden to geography + size and
+                            # flag every resulting Lead so off-vertical results are
+                            # never mistaken for on-vertical matches.
+                            skip_industry = True
+                            self._industry_relaxed = True
+                            scroll_token = None  # Reset for new search
+                            logger.warning(
+                                "PDL: industry filter %s matched 0 records. "
+                                "relax_industry=True -> retrying WITHOUT industry "
+                                "(geography + size only). Returned leads are flagged "
+                                "industry_relaxed=True and are NOT on-vertical.",
+                                self._pdl_industry_terms(),
+                            )
+                            continue
+                        # FAIL CLOSED (default): do NOT silently drop the industry
+                        # filter. Return empty rather than off-vertical leads.
+                        logger.warning(
+                            "PDL: industry filter %s matched 0 records. Failing "
+                            "closed — returning 0 leads instead of dropping the "
+                            "industry filter and returning off-vertical leads. "
+                            "Verify the term is a valid PDL taxonomy value, or pass "
+                            "relax_industry=True to explicitly opt into a broadened "
+                            "(flagged) search.",
+                            self._pdl_industry_terms(),
+                        )
+                        break
                     logger.info(
                         "PDL: No records matched your search. Try relaxing filters "
                         "(e.g. broader geography)."
@@ -323,4 +396,7 @@ class PDLConnector:
             contact=contact,
             company=comp_info,
             raw_data=person,
+            # True only when an explicit relax_industry opt-in dropped the
+            # industry filter — marks this lead as NOT verified on-vertical.
+            industry_relaxed=self._industry_relaxed,
         )

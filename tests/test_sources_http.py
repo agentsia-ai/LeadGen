@@ -356,12 +356,41 @@ async def test_pdl_search_builds_es_query_and_parses_records(
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_pdl_404_with_industry_retries_without_industry(
+async def test_pdl_404_with_industry_fails_closed_by_default(
     test_config, test_keys
 ) -> None:
-    """A 404 while an industry filter is present triggers a retry with the
-    industry filter dropped — protects against PDL's stricter industry
-    taxonomy breaking ICPs that use our looser labels."""
+    """A 404 with an industry filter present must FAIL CLOSED: return 0 leads
+    rather than silently dropping the industry filter and pulling off-vertical
+    leads. Only ONE request is made — there is no broadened retry by default."""
+    import json as _json
+
+    call_count = {"n": 0}
+
+    def _handler(request: httpx.Request):
+        call_count["n"] += 1
+        _json.loads(request.url.params.get("query"))
+        return httpx.Response(404, json={"error": "No records"})
+
+    respx.get("https://api.peopledatalabs.com/v5/person/search").mock(
+        side_effect=_handler
+    )
+
+    async with PDLConnector(test_config, test_keys) as p:
+        leads = await p.search(limit=5)
+
+    # Fail closed: no leads, and crucially NO second (industry-dropped) call.
+    assert leads == []
+    assert call_count["n"] == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_pdl_relax_industry_opt_in_drops_filter_and_flags(
+    test_config, test_keys
+) -> None:
+    """With the explicit relax_industry=True opt-in, a 404 broadens to
+    geography + size only AND every returned Lead is flagged
+    industry_relaxed=True so it can't be mistaken for an on-vertical match."""
     import json as _json
 
     call_count = {"n": 0}
@@ -394,13 +423,15 @@ async def test_pdl_404_with_industry_retries_without_industry(
     )
 
     async with PDLConnector(test_config, test_keys) as p:
-        leads = await p.search(limit=5)
+        leads = await p.search(limit=5, relax_industry=True)
 
     assert len(leads) == 1
     assert call_count["n"] == 2
+    # Relaxed leads must be flagged so they aren't treated as on-vertical.
+    assert leads[0].industry_relaxed is True
 
-    # The captured `query` param is the ES body directly — `{"bool":
-    # {"must": [...]}}` — not wrapped in another "query" key.
+    # First request carried an exact industry clause (term/terms on the
+    # canonical PDL field); the post-404 retry dropped it entirely.
     first_clause_kinds = [
         next(iter(c.keys())) for c in queries[0]["bool"]["must"]
     ]
@@ -408,12 +439,30 @@ async def test_pdl_404_with_industry_retries_without_industry(
         next(iter(next(iter(c.values())).keys()))
         for c in queries[1]["bool"]["must"]
     ]
-    # First request had an industry match clause...
-    assert "match" in first_clause_kinds
-    # ...second (post-404 retry) dropped the industry filter entirely.
+    assert any(k in first_clause_kinds for k in ("term", "terms"))
+    assert any(
+        "job_company_industry" in f
+        for c in queries[0]["bool"]["must"]
+        for f in [next(iter(next(iter(c.values())).keys()))]
+    )
     assert not any(
         "job_company_industry" in f for f in second_clause_field_names
     )
+
+
+@pytest.mark.asyncio
+async def test_pdl_invalid_industry_fails_loudly_before_http(
+    test_config, test_keys
+) -> None:
+    """An ICP industry that isn't a valid PDL taxonomy value (and has no alias)
+    must raise BEFORE any HTTP/credit spend, naming the bad term — never 404
+    silently into a broadened search."""
+    from leadgen.sources.pdl_industries import InvalidIndustryError
+
+    test_config.icp.industries = ["insurance agencies", "totally bogus vertical"]
+    async with PDLConnector(test_config, test_keys) as p:
+        with pytest.raises(InvalidIndustryError, match="totally bogus vertical"):
+            await p.search(limit=1)
 
 
 @pytest.mark.asyncio

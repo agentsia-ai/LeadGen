@@ -112,6 +112,11 @@ async def list_tools() -> list[Tool]:
                         "enum": ["apollo", "hunter", "pdl"],
                         "description": "Lead source: apollo, hunter (requires domain), or pdl (100 free credits/month).",
                     },
+                    "relax_industry": {
+                        "type": "boolean",
+                        "description": "PDL only. If the industry filter matches nothing, broaden to geography+size. "
+                        "Returned leads are flagged industry_relaxed and are NOT on-vertical. Default false (fail closed).",
+                    },
                 },
             },
         ),
@@ -285,7 +290,9 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             if not keys.pdl:
                 return [TextContent(type="text", text=json.dumps({"error": "PDL_API_KEY is not set. Provide it as an environment variable (set it in Doppler for production, or a local .env for development)."}))]
             async with PDLConnector(config, keys) as pdl:
-                leads = await pdl.search(limit=limit)
+                leads = await pdl.search(
+                    limit=limit, relax_industry=arguments.get("relax_industry", False)
+                )
         else:
             if not keys.apollo:
                 return [TextContent(type="text", text=json.dumps({"error": "APOLLO_API_KEY is not set. Provide it as an environment variable (set it in Doppler for production, or a local .env for development)."}))]
@@ -308,6 +315,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 "company": lead.company.name,
                 "title": lead.contact.title,
                 "industry": lead.company.industry,
+                "industry_relaxed": lead.industry_relaxed,
                 "location": ", ".join(p for p in (lead.company.city, lead.company.state) if p) or None,
                 "email": lead.contact.email,
                 "email_verified": lead.contact.email_verified,

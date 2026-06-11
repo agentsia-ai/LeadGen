@@ -45,8 +45,15 @@ def main(ctx, config, debug):
     default=None,
     help="Company domain for Hunter search (e.g. acmecorp.com). Required when using Hunter.",
 )
+@click.option(
+    "--relax-industry",
+    is_flag=True,
+    default=False,
+    help="PDL only: if the industry filter matches nothing, broaden to geography+size. "
+    "Returned leads are flagged industry_relaxed and are NOT on-vertical. Off by default (fail closed).",
+)
 @click.pass_context
-def search(ctx, limit, source, domain):
+def search(ctx, limit, source, domain, relax_industry):
     """Fetch new leads from Apollo, Hunter, or People Data Labs."""
     async def _run():
         from leadgen.config.loader import load_config, load_api_keys
@@ -85,7 +92,7 @@ def search(ctx, limit, source, domain):
 
             with console.status(f"Fetching {limit} leads from People Data Labs..."):
                 async with PDLConnector(cfg, keys) as pdl:
-                    leads = await pdl.search(limit=limit)
+                    leads = await pdl.search(limit=limit, relax_industry=relax_industry)
         else:
             if not keys.apollo:
                 console.print("[red]X[/red] APOLLO_API_KEY is not set. Set it in Doppler (production) or a local .env (development).")

@@ -120,6 +120,10 @@ class Lead(BaseModel):
     outreach_history: list[OutreachRecord] = []
     notes: str = ""
     tags: list[str] = []
+    # True when a lead was returned by a source whose vertical filter was
+    # explicitly relaxed (e.g. PDL industry filter dropped via opt-in). Such
+    # leads are NOT verified on-vertical and must not be treated as exact-ICP.
+    industry_relaxed: bool = False
     raw_data: dict = {}          # original API response, preserved for debugging
     created_at: datetime = Field(default_factory=now_utc)
     updated_at: datetime = Field(default_factory=now_utc)
