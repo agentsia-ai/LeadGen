@@ -252,6 +252,82 @@ def enrich(ctx, limit):
     asyncio.run(_run())
 
 
+@main.command("update")
+@click.argument("lead_id")
+@click.option("--email", default=None, help="Contact email to set")
+@click.option("--domain", default=None, help="Company domain override")
+@click.option("--phone", default=None, help="Contact phone to set")
+@click.option(
+    "--email-verified",
+    is_flag=True,
+    default=False,
+    help="Mark the email as verified (manual assertion)",
+)
+@click.option(
+    "--verify",
+    is_flag=True,
+    help="Run Hunter email-verifier on the email (not finder)",
+)
+@click.option("--status", default=None, help="Pipeline status (e.g. enriched)")
+@click.option("--note", default=None, help="Note appended to the lead for provenance")
+@click.pass_context
+def update_lead_cmd(ctx, lead_id, email, domain, phone, email_verified, verify, status, note):
+    """Manually set or correct a lead's contact info (email, domain, phone)."""
+    async def _run():
+        from leadgen.config.loader import load_config, load_api_keys
+        from leadgen.crm.database import LeadDatabase
+        from leadgen.crm.update_lead import update_lead
+        from leadgen.sources.hunter import HunterConnector
+
+        cfg = load_config(ctx.obj.get("config_path"))
+        keys = load_api_keys()
+        db = LeadDatabase(cfg.database.sqlite_path)
+        await db.init()
+
+        kwargs: dict = {}
+        if email is not None:
+            kwargs["email"] = email
+        if domain is not None:
+            kwargs["domain"] = domain
+        if phone is not None:
+            kwargs["phone"] = phone
+        if email_verified:
+            kwargs["email_verified"] = True
+        if status is not None:
+            kwargs["status"] = status
+        if note is not None:
+            kwargs["note"] = note
+
+        if verify:
+            if not keys.hunter:
+                console.print("[red]X[/red] HUNTER_API_KEY is not set. Set it in Doppler (production) or a local .env (development).")
+                return
+            async with HunterConnector(cfg, keys) as hunter:
+                result = await update_lead(
+                    db, lead_id, verify=True, hunter=hunter, **kwargs
+                )
+        else:
+            result = await update_lead(db, lead_id, **kwargs)
+
+        if result.get("error"):
+            console.print(f"[red]X[/red] {result['error']}")
+            return
+        if result.get("status") == "collision":
+            console.print(f"[yellow]![/yellow] {result['reason']}")
+            return
+
+        console.print(
+            f"[green]OK[/green] Updated {result.get('name', lead_id)} "
+            f"({', '.join(result.get('updated_fields', []))})"
+        )
+        console.print(f"  email: {result.get('email') or '-'}")
+        console.print(f"  email_verified: {result.get('email_verified')}")
+        console.print(f"  domain: {result.get('domain') or '-'}")
+        console.print(f"  status: {result.get('status')}")
+
+    asyncio.run(_run())
+
+
 @main.command("list")
 @click.option("--limit", default=100, help="Max leads to show")
 @click.option("--status", default=None, help="Filter by status (e.g. new, scored)")
