@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 from pathlib import Path
 
 import aiosqlite
@@ -16,6 +17,22 @@ from leadgen._time import parse_iso
 from leadgen.models import Lead, LeadStatus
 
 logger = logging.getLogger(__name__)
+
+
+class EmailCollisionError(Exception):
+    """A write would violate the ``UNIQUE(contact_email)`` index.
+
+    Raised by :meth:`LeadDatabase.upsert` when the email being written
+    already belongs to a *different* lead row. Carries the colliding email
+    and the id of the lead that currently holds it so batch callers (e.g.
+    the MCP ``enrich_lead`` tool) can skip just that one lead, keep the rest
+    of the batch going, and tell the operator which row owns the address.
+    """
+
+    def __init__(self, email: str | None, existing_lead_id: str | None):
+        self.email = email
+        self.existing_lead_id = existing_lead_id
+        super().__init__(f"email {email!r} already on lead {existing_lead_id}")
 
 
 class LeadDatabase:
@@ -62,116 +79,172 @@ class LeadDatabase:
         logger.info(f"Database initialized: {self.db_path}")
 
     @staticmethod
-    def _identity_key(contact: dict, company: dict) -> str | None:
-        """Compute a dedupe key for a lead from its contact/company dicts.
+    def _name_company_key(contact: dict, company: dict) -> str | None:
+        """Email-INDEPENDENT identity key: person name + company.
 
-        Prefers email when present; otherwise falls back to a
-        name + company + domain composite. Returns None when there's no
-        identifying info (so blank records are never grouped together).
+        Deliberately ignores email so the *same person at the same company*
+        collapses to one row regardless of whether the incoming email is
+        null. PDL's free tier returns null emails, so an email-bearing key
+        let an already-known (enriched) person look brand-new when PDL
+        re-returned them with ``email=None`` — stacking duplicate rows and
+        wasting PDL/Hunter credits re-fetching someone we already had.
 
-        Shared by `upsert` (insert-time dedupe) and `find_duplicates`
-        (one-time cleanup) so both use exactly the same notion of identity.
+        Returns None unless BOTH a person name and a company name are
+        present: matching on company alone would wrongly merge different
+        people at the same firm, and matching on name alone would merge
+        namesakes across companies.
+
+        Shared by `upsert` (insert-time dedupe) and `find_duplicates` /
+        `delete_duplicates` (cleanup) so prevention and cure use exactly the
+        same notion of identity.
         """
-        email = contact.get("email") or None
-        if email:
-            return f"email:{email.lower().strip()}"
         first = contact.get("first_name") or ""
         last = contact.get("last_name") or ""
-        full_name = contact.get("full_name") or f"{first} {last}".strip()
-        company_name = company.get("name") or ""
-        domain = company.get("domain") or company.get("website") or ""
-        if full_name or company_name or domain:
-            return f"name:{full_name.lower()}|company:{company_name.lower()}|domain:{domain.lower()}"
-        return None
+        full_name = (contact.get("full_name") or f"{first} {last}").strip()
+        company_name = (company.get("name") or "").strip()
+        if not full_name or not company_name:
+            return None
+        return f"name:{full_name.lower()}|company:{company_name.lower()}"
 
     async def upsert(self, lead: Lead, dedupe_on_identity: bool = False) -> bool:
         """Insert or update a lead. Returns True if new, False if updated.
 
         By default, dedupe is by id then by email. Pass
         ``dedupe_on_identity=True`` (used by the fetch-new-leads paths) to also
-        collapse email-less leads onto an existing record sharing the same
-        name+company+domain identity key — this stops repeated PDL pulls (which
-        return null emails on the free tier) from stacking duplicate rows.
-        Kept opt-in so the dedupe-cleanup helpers can still be exercised against
-        deliberately-duplicated rows.
+        collapse leads onto an existing record sharing the same name+company
+        identity — regardless of whether the incoming email is null. This stops
+        repeated PDL pulls (which return null emails on the free tier) from
+        stacking duplicate rows for someone we already enriched, and saves the
+        PDL/Hunter credits we'd otherwise burn re-fetching a known person.
+
+        When a lead collapses onto a *different* existing row (matched by email
+        or by identity, not by id), the merge is NON-DESTRUCTIVE: a thinner
+        re-fetch can never overwrite an existing email with null or downgrade
+        the stored status. Only genuinely-missing fields (email, domain) are
+        filled in from the incoming record.
+
+        Raises :class:`EmailCollisionError` if the email being written already
+        belongs to a different lead (the ``UNIQUE(contact_email)`` index), so
+        batch callers can isolate the one colliding lead instead of aborting.
         """
         async with aiosqlite.connect(self.db_path) as db:
-            # Check for existing: by id first (e.g. lead loaded from DB, enriched), then by email
-            existing = None
+            # Check for existing: by id first (e.g. lead loaded from DB,
+            # enriched, re-saved), then by email.
+            existing_id: str | None = None
+            matched_by_id = False
             async with db.execute("SELECT id FROM leads WHERE id = ?", (lead.id,)) as cur:
-                existing = await cur.fetchone()
-            if not existing and lead.contact.email:
+                row = await cur.fetchone()
+                if row:
+                    existing_id = row[0]
+                    matched_by_id = True
+            if not existing_id and lead.contact.email:
                 async with db.execute(
                     "SELECT id FROM leads WHERE contact_email = ?", (lead.contact.email,)
                 ) as cur:
-                    existing = await cur.fetchone()
-            # Email-less leads (e.g. PDL free tier) won't match on id or email,
-            # so repeated pulls used to stack duplicate rows. Fall back to a
-            # name+company identity key so the same person at the same company
-            # collapses onto the existing record instead.
-            if dedupe_on_identity and not existing and not lead.contact.email:
-                new_key = self._identity_key(
+                    row = await cur.fetchone()
+                    if row:
+                        existing_id = row[0]
+            # Email-INDEPENDENT identity fallback. Runs whether or not the
+            # incoming email is null, and matches existing rows in ANY status
+            # with ANY email value — so a re-fetched person who comes back with
+            # email=None still collapses onto the already-enriched row instead
+            # of stacking a duplicate. (Problem 1)
+            if dedupe_on_identity and not existing_id:
+                new_key = self._name_company_key(
                     lead.contact.model_dump(), lead.company.model_dump()
                 )
                 if new_key:
                     async with db.execute(
                         "SELECT id, contact_json, company_json FROM leads "
-                        "WHERE contact_email IS NULL AND company_name = ?",
-                        (lead.company.name,),
+                        "WHERE LOWER(company_name) = ?",
+                        ((lead.company.name or "").lower(),),
                     ) as cur:
                         candidates = await cur.fetchall()
                     for cand_id, contact_json, company_json in candidates:
-                        cand_key = self._identity_key(
+                        cand_key = self._name_company_key(
                             json.loads(contact_json), json.loads(company_json)
                         )
                         if cand_key == new_key:
-                            existing = (cand_id,)
+                            existing_id = cand_id
                             break
 
+            # Decide what to persist. A dedupe COLLAPSE (matched a different
+            # row, not by id) merges non-destructively onto the stored record;
+            # everything else persists the incoming lead as-is.
+            if existing_id and not matched_by_id:
+                async with db.execute(
+                    "SELECT * FROM leads WHERE id = ?", (existing_id,)
+                ) as cur:
+                    erow = await cur.fetchone()
+                target = self._row_to_lead(erow)
+                if lead.contact.email and not target.contact.email:
+                    target.contact.email = lead.contact.email
+                    target.contact.email_verified = lead.contact.email_verified
+                if lead.company.domain and not target.company.domain:
+                    target.company.domain = lead.company.domain
+                target.touch()
+            else:
+                target = lead
+
             row = (
-                lead.id,
-                lead.source.value,
-                lead.status.value,
-                lead.contact.model_dump_json(),
-                lead.company.model_dump_json(),
-                lead.score.model_dump_json() if lead.score else None,
-                json.dumps([r.model_dump(mode="json") for r in lead.outreach_history]),
-                lead.notes,
-                json.dumps(lead.tags),
-                json.dumps(lead.raw_data),
-                lead.created_at.isoformat(),
-                lead.updated_at.isoformat(),
-                lead.company.name,
-                lead.contact.email,
-                lead.score.total if lead.score else None,
+                target.id,
+                target.source.value,
+                target.status.value,
+                target.contact.model_dump_json(),
+                target.company.model_dump_json(),
+                target.score.model_dump_json() if target.score else None,
+                json.dumps([r.model_dump(mode="json") for r in target.outreach_history]),
+                target.notes,
+                json.dumps(target.tags),
+                json.dumps(target.raw_data),
+                target.created_at.isoformat(),
+                target.updated_at.isoformat(),
+                target.company.name,
+                target.contact.email,
+                target.score.total if target.score else None,
             )
 
-            if existing:
-                await db.execute("""
-                    UPDATE leads SET
-                        status=?, contact_json=?, company_json=?, score_json=?,
-                        outreach_json=?, notes=?, tags_json=?, updated_at=?,
-                        score_total=?, company_name=?, contact_email=?
-                    WHERE id=?
-                """, (
-                    lead.status.value, lead.contact.model_dump_json(),
-                    lead.company.model_dump_json(),
-                    lead.score.model_dump_json() if lead.score else None,
-                    json.dumps([r.model_dump(mode="json") for r in lead.outreach_history]),
-                    lead.notes, json.dumps(lead.tags),
-                    lead.updated_at.isoformat(),
-                    lead.score.total if lead.score else None,
-                    lead.company.name, lead.contact.email,
-                    existing[0],
-                ))
-                await db.commit()
-                return False
-            else:
-                await db.execute("""
-                    INSERT INTO leads VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                """, row)
-                await db.commit()
-                return True
+            try:
+                if existing_id:
+                    await db.execute("""
+                        UPDATE leads SET
+                            status=?, contact_json=?, company_json=?, score_json=?,
+                            outreach_json=?, notes=?, tags_json=?, updated_at=?,
+                            score_total=?, company_name=?, contact_email=?
+                        WHERE id=?
+                    """, (
+                        target.status.value, target.contact.model_dump_json(),
+                        target.company.model_dump_json(),
+                        target.score.model_dump_json() if target.score else None,
+                        json.dumps([r.model_dump(mode="json") for r in target.outreach_history]),
+                        target.notes, json.dumps(target.tags),
+                        target.updated_at.isoformat(),
+                        target.score.total if target.score else None,
+                        target.company.name, target.contact.email,
+                        existing_id,
+                    ))
+                    await db.commit()
+                    return False
+                else:
+                    await db.execute("""
+                        INSERT INTO leads VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """, row)
+                    await db.commit()
+                    return True
+            except sqlite3.IntegrityError as exc:
+                # The only writable UNIQUE constraint is idx_leads_email, so an
+                # IntegrityError here means the email already belongs to another
+                # lead. Surface WHICH lead so the operator can reconcile. (P2)
+                await db.rollback()
+                holder = None
+                if target.contact.email:
+                    async with db.execute(
+                        "SELECT id FROM leads WHERE contact_email = ? AND id != ?",
+                        (target.contact.email, existing_id or target.id),
+                    ) as cur:
+                        r = await cur.fetchone()
+                        holder = r[0] if r else None
+                raise EmailCollisionError(target.contact.email, holder) from exc
 
     async def get(self, lead_id: str) -> Lead | None:
         """Fetch a single lead by ID."""
@@ -212,7 +285,13 @@ class LeadDatabase:
                 return [self._row_to_lead(r) for r in rows]
 
     async def find_duplicates(self) -> list[tuple[str, list[str]]]:
-        """Find duplicate leads. Returns list of (dedupe_key, [lead_ids]) for groups with >1."""
+        """Find duplicate leads. Returns list of (dedupe_key, [lead_ids]) for groups with >1.
+
+        Groups on the email-INDEPENDENT name+company key, so a null-email row
+        and an already-enriched row for the *same person* are recognized as
+        duplicates (e.g. the two 'Lloyd Chatfield / Outside General Counsel'
+        rows) even though only one of them has an email. (Problem 3)
+        """
         async with aiosqlite.connect(self.db_path) as db:
             async with db.execute(
                 "SELECT id, contact_json, company_json FROM leads"
@@ -223,14 +302,21 @@ class LeadDatabase:
             lead_id = row[0]
             contact = json.loads(row[1])
             company = json.loads(row[2])
-            key = self._identity_key(contact, company)
+            key = self._name_company_key(contact, company)
             if not key:
                 continue  # No identifying info, skip (can't safely dedupe)
             key_to_ids.setdefault(key, []).append(lead_id)
         return [(k, ids) for k, ids in key_to_ids.items() if len(ids) > 1]
 
     async def delete_duplicates(self, keep: str = "oldest") -> int:
-        """Remove duplicate leads. keep='oldest' keeps first created; 'newest' keeps last updated."""
+        """Remove duplicate leads. keep='oldest' keeps first created; 'newest' keeps last updated.
+
+        Within each duplicate group, an ENRICHED row (one that has an email) is
+        always preferred over an email-less row regardless of the keep order,
+        so collapsing the two-Lloyd case keeps the row carrying the verified
+        email and drops the null-email re-fetch. The keep order only breaks ties
+        among rows in the same email state. (Problem 3)
+        """
         dupes = await self.find_duplicates()
         if not dupes:
             return 0
@@ -238,9 +324,12 @@ class LeadDatabase:
         deleted = 0
         async with aiosqlite.connect(self.db_path) as db:
             for _key, ids in dupes:
-                # Get ids in order - keep first, delete rest
+                # Order so rows WITH an email sort first (contact_email IS NULL
+                # is 0 for emails, 1 for nulls), then by the keep order. Keep
+                # the first, delete the rest.
                 async with db.execute(
-                    f"SELECT id FROM leads WHERE id IN ({','.join('?'*len(ids))}) ORDER BY {order_col} ASC",
+                    f"SELECT id FROM leads WHERE id IN ({','.join('?'*len(ids))}) "
+                    f"ORDER BY (contact_email IS NULL) ASC, {order_col} ASC",
                     ids,
                 ) as cur:
                     ordered = [r[0] for r in await cur.fetchall()]
