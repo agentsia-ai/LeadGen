@@ -192,6 +192,46 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="update_lead",
+            description=(
+                "Manually set or correct a lead's contact info (email, domain, phone). "
+                "Use when enrichment pointed at the wrong domain or an operator found "
+                "an email on a company site. Only passed fields are updated. "
+                "Manual emails default to email_verified=false; pass email_verified=true "
+                "to assert deliverability, or verify=true to run Hunter email-verifier "
+                "(not finder) on the address."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "lead_id": {"type": "string"},
+                    "email": {"type": "string", "description": "Contact email to set"},
+                    "domain": {
+                        "type": "string",
+                        "description": "Company domain override (e.g. americorpre.com)",
+                    },
+                    "phone": {"type": "string", "description": "Contact phone to set"},
+                    "email_verified": {
+                        "type": "boolean",
+                        "description": "Mark email as verified (default false when email is set)",
+                    },
+                    "verify": {
+                        "type": "boolean",
+                        "description": "Run Hunter email-verifier on the email and set email_verified from the result",
+                    },
+                    "status": {
+                        "type": "string",
+                        "description": "Optional pipeline status (e.g. enriched)",
+                    },
+                    "note": {
+                        "type": "string",
+                        "description": "Optional note appended to the lead for provenance",
+                    },
+                },
+                "required": ["lead_id"],
+            },
+        ),
+        Tool(
             name="update_lead_status",
             description="Update the status of a lead in the pipeline.",
             inputSchema={
@@ -493,6 +533,42 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             "approved": len(pending),
             "lead": lead.display_name,
         }))]
+
+    elif name == "update_lead":
+        from leadgen.crm.update_lead import update_lead as apply_update_lead
+        from leadgen.sources.hunter import HunterConnector
+
+        lead_id = arguments["lead_id"]
+        kwargs: dict = {}
+        if "email" in arguments:
+            kwargs["email"] = arguments["email"]
+        if "domain" in arguments:
+            kwargs["domain"] = arguments["domain"]
+        if "phone" in arguments:
+            kwargs["phone"] = arguments["phone"]
+        if "email_verified" in arguments:
+            kwargs["email_verified"] = arguments["email_verified"]
+        if "status" in arguments:
+            kwargs["status"] = arguments["status"]
+        if "note" in arguments:
+            kwargs["note"] = arguments["note"]
+
+        verify = arguments.get("verify", False)
+        if verify:
+            if not keys.hunter:
+                return [TextContent(type="text", text=json.dumps({
+                    "error": "HUNTER_API_KEY is not set. Provide it as an environment variable "
+                    "(set it in Doppler for production, or a local .env for development).",
+                    "lead_id": lead_id,
+                }))]
+            async with HunterConnector(config, keys) as hunter:
+                result = await apply_update_lead(
+                    db, lead_id, verify=True, hunter=hunter, **kwargs
+                )
+        else:
+            result = await apply_update_lead(db, lead_id, **kwargs)
+
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
     elif name == "update_lead_status":
         lead = await db.get(arguments["lead_id"])
