@@ -32,7 +32,7 @@ from leadgen._time import now_utc
 from leadgen.ai.drafter import OutreachDrafter
 from leadgen.ai.scorer import LeadScorer
 from leadgen.config.loader import display_agent_name, load_api_keys, load_config
-from leadgen.crm.database import LeadDatabase
+from leadgen.crm.database import EmailCollisionError, LeadDatabase
 from leadgen.models import LeadStatus
 
 logger = logging.getLogger(__name__)
@@ -368,6 +368,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
                 company = lead.company.name or "unknown company"
                 if lead.contact.email and lead.contact.email_verified:
+                    # Skip — don't re-spend Hunter on an already-verified lead.
                     results.append({
                         "lead_id": lead.id, "name": lead.display_name, "company": company,
                         "email": lead.contact.email, "email_verified": True,
@@ -375,40 +376,57 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     })
                     continue
 
-                domain, source = await hunter.resolve_company_domain_with_source(lead)
-                if not domain:
-                    await db.upsert(lead)  # nothing changed, but keep record consistent
-                    results.append({
-                        "lead_id": lead.id, "name": lead.display_name, "company": company,
-                        "status": "no_domain",
-                        "reason": f"no domain resolvable for {company}",
-                    })
-                    continue
+                # Each lead is written independently: a UNIQUE(contact_email)
+                # collision (the resolved email already belongs to another row)
+                # skips ONLY this lead and surfaces which row holds it, instead
+                # of aborting the whole batch. (Problem 2)
+                try:
+                    domain, source = await hunter.resolve_company_domain_with_source(lead)
+                    if not domain:
+                        await db.upsert(lead)  # nothing changed, but keep record consistent
+                        results.append({
+                            "lead_id": lead.id, "name": lead.display_name, "company": company,
+                            "status": "no_domain",
+                            "reason": f"no domain resolvable for {company}",
+                        })
+                        continue
 
-                # Reuse the engine's find+verify path; domain is already set on
-                # the lead, so this consumes no extra name->domain credit.
-                await hunter.enrich_lead_email(lead)
+                    # Reuse the engine's find+verify path; domain is already set
+                    # on the lead, so this consumes no extra name->domain credit.
+                    await hunter.enrich_lead_email(lead)
 
-                if lead.contact.email:
-                    lead.status = LeadStatus.ENRICHED
-                    lead.touch()
-                    await db.upsert(lead)
+                    if lead.contact.email:
+                        lead.status = LeadStatus.ENRICHED
+                        lead.touch()
+                        await db.upsert(lead)
+                        results.append({
+                            "lead_id": lead.id, "name": lead.display_name, "company": company,
+                            "domain": domain, "domain_source": source,
+                            "email": lead.contact.email,
+                            "email_verified": lead.contact.email_verified,
+                            "status": "enriched" if lead.contact.email_verified else "found_unverified",
+                        })
+                    else:
+                        # Persist the resolved domain even when no email was found,
+                        # so a later retry doesn't re-pay for domain resolution.
+                        await db.upsert(lead)
+                        results.append({
+                            "lead_id": lead.id, "name": lead.display_name, "company": company,
+                            "domain": domain, "domain_source": source,
+                            "status": "no_email",
+                            "reason": f"no Hunter match >=70 confidence for {lead.display_name} at {domain}",
+                        })
+                except EmailCollisionError as exc:
                     results.append({
                         "lead_id": lead.id, "name": lead.display_name, "company": company,
-                        "domain": domain, "domain_source": source,
-                        "email": lead.contact.email,
-                        "email_verified": lead.contact.email_verified,
-                        "status": "enriched" if lead.contact.email_verified else "found_unverified",
+                        "email": exc.email, "status": "collision",
+                        "reason": f"collision: email already on lead {exc.existing_lead_id}",
                     })
-                else:
-                    # Persist the resolved domain even when no email was found,
-                    # so a later retry doesn't re-pay for domain resolution.
-                    await db.upsert(lead)
+                except Exception as exc:  # noqa: BLE001 — isolate one lead, keep batch alive
+                    logger.exception("enrich_lead failed for %s", lead.id)
                     results.append({
                         "lead_id": lead.id, "name": lead.display_name, "company": company,
-                        "domain": domain, "domain_source": source,
-                        "status": "no_email",
-                        "reason": f"no Hunter match >=70 confidence for {lead.display_name} at {domain}",
+                        "status": "error", "reason": str(exc),
                     })
 
         return [TextContent(type="text", text=json.dumps({

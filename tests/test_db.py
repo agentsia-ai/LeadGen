@@ -12,7 +12,7 @@ import aiosqlite
 import pytest
 
 from leadgen._time import now_utc
-from leadgen.crm.database import LeadDatabase
+from leadgen.crm.database import EmailCollisionError, LeadDatabase
 from leadgen.models import (
     CompanyInfo,
     ContactInfo,
@@ -78,6 +78,72 @@ async def test_upsert_dedups_by_email_even_with_different_id(
 
     counts = await initialized_db.count_by_status()
     assert sum(counts.values()) == 1
+
+
+@pytest.mark.asyncio
+async def test_identity_dedup_collapses_null_email_repull_onto_enriched(
+    initialized_db: LeadDatabase,
+) -> None:
+    """PROBLEM 1 (prevention). A person already in the DB *with* an email is
+    re-fetched by PDL with email=None and a fresh id. The email-independent
+    name+company identity must collapse the re-pull onto the existing row —
+    no new row, and the enriched email/status must NOT be clobbered by the
+    thinner re-fetch. Also exercises case-insensitive company match + missing
+    domain on the incoming record (the real two-Lloyd shape)."""
+    enriched = _lead(email="known@acme.com", name="Acme", status=LeadStatus.ENRICHED)
+    assert await initialized_db.upsert(enriched, dedupe_on_identity=True) is True
+
+    repull = _lead(email=None, name="ACME", domain=None)  # diff case, no domain
+    assert repull.id != enriched.id
+    assert await initialized_db.upsert(repull, dedupe_on_identity=True) is False
+
+    counts = await initialized_db.count_by_status()
+    assert sum(counts.values()) == 1  # no duplicate inserted
+
+    kept = await initialized_db.get(enriched.id)
+    assert kept is not None
+    assert kept.contact.email == "known@acme.com"   # email preserved
+    assert kept.status == LeadStatus.ENRICHED         # status not downgraded
+
+
+@pytest.mark.asyncio
+async def test_identity_dedup_fills_missing_email_without_duplicating(
+    initialized_db: LeadDatabase,
+) -> None:
+    """A fresh fetch that DOES carry an email for a person we only had
+    email-less must enrich the existing row in place (no duplicate), not
+    insert a second copy."""
+    seed = _lead(email=None, name="Acme")
+    assert await initialized_db.upsert(seed, dedupe_on_identity=True) is True
+
+    with_email = _lead(email="found@acme.com", name="Acme")
+    assert await initialized_db.upsert(with_email, dedupe_on_identity=True) is False
+
+    counts = await initialized_db.count_by_status()
+    assert sum(counts.values()) == 1
+    kept = await initialized_db.get(seed.id)
+    assert kept is not None and kept.contact.email == "found@acme.com"
+
+
+@pytest.mark.asyncio
+async def test_upsert_raises_email_collision_for_duplicate_email_on_other_id(
+    initialized_db: LeadDatabase,
+) -> None:
+    """PROBLEM 2 (backstop). Writing an email that already belongs to a
+    different lead raises EmailCollisionError carrying the holder id, so a
+    batch caller can skip the one colliding lead instead of aborting."""
+    a = _lead(email="taken@x.com", name="Acme")
+    await initialized_db.upsert(a)
+    b = _lead(email=None, name="Other")
+    await initialized_db.upsert(b)
+
+    # b later resolves (e.g. via Hunter) to an email already owned by a.
+    b.contact.email = "taken@x.com"
+    b.contact.email_verified = True
+    with pytest.raises(EmailCollisionError) as exc:
+        await initialized_db.upsert(b)
+    assert exc.value.existing_lead_id == a.id
+    assert exc.value.email == "taken@x.com"
 
 
 @pytest.mark.asyncio
@@ -185,6 +251,47 @@ async def test_find_duplicates_ignores_leads_with_no_identifying_info(
 
     dupes = await initialized_db.find_duplicates()
     assert dupes == []
+
+
+@pytest.mark.asyncio
+async def test_find_duplicates_groups_enriched_and_null_same_person(
+    initialized_db: LeadDatabase,
+) -> None:
+    """PROBLEM 3 (cleanup). An enriched row (has email) and a null-email row
+    for the SAME person at the SAME company are recognized as duplicates,
+    even though their emails differ. This is the two-Lloyd case."""
+    enriched = _lead(email="pat@acme.com", name="Acme", full_name="Pat Q")
+    nullrow = _lead(email=None, name="Acme", full_name="Pat Q")
+    assert enriched.id != nullrow.id
+
+    await initialized_db.upsert(enriched)  # default: no identity collapse
+    await initialized_db.upsert(nullrow)
+
+    dupes = await initialized_db.find_duplicates()
+    assert len(dupes) == 1
+    _key, ids = dupes[0]
+    assert sorted(ids) == sorted([enriched.id, nullrow.id])
+
+
+@pytest.mark.asyncio
+async def test_delete_duplicates_keeps_enriched_over_null_even_if_newer(
+    initialized_db: LeadDatabase,
+) -> None:
+    """PROBLEM 3 (cleanup). When collapsing the two-Lloyd case, the row with
+    an email survives regardless of keep order — here the enriched row is the
+    NEWER one, yet keep='oldest' still keeps it because email beats age."""
+    null_old = _lead(email=None, name="Acme", full_name="Pat Q")
+    enriched_new = _lead(email="pat@acme.com", name="Acme", full_name="Pat Q")
+    null_old.created_at = now_utc() - timedelta(days=5)
+    enriched_new.created_at = now_utc()
+
+    await initialized_db.upsert(null_old)
+    await initialized_db.upsert(enriched_new)
+
+    deleted = await initialized_db.delete_duplicates(keep="oldest")
+    assert deleted == 1
+    assert await initialized_db.get(enriched_new.id) is not None
+    assert await initialized_db.get(null_old.id) is None
 
 
 @pytest.mark.asyncio
