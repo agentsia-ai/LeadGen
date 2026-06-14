@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 
 import anthropic
@@ -35,6 +36,15 @@ Write emails that:
 - Have one clear, low-friction call to action
 - Sound human — avoid corporate jargon and AI-speak
 - Never start with "I hope this email finds you well" or similar clichés
+
+HARD CONSTRAINT — NO FABRICATED SPECIFICS:
+Only state concrete facts from the prospect info in the user message or the
+sender's configured value prop/proof points. Never invent clients, case studies,
+testimonials, statistics about other customers, or unverified "I noticed…"
+claims. Stay generic when you lack a verifiable specific.
+
+End the body with the last message sentence — no sign-off or name. The engine
+appends the signature block.
 
 Return ONLY the email content in this JSON format:
 {
@@ -136,6 +146,11 @@ ICP Score Reasoning: {lead.score.reasoning if lead.score else 'Not scored'}
 === TONE ===
 {tone}
 
+=== VERIFICATION RULES ===
+Only use concrete facts from PROSPECT INFO or SENDER INFO above. Never invent
+clients, case studies, testimonials, customer statistics, or "I saw/noticed"
+claims. End the body without a sign-off — the engine appends the signature.
+
 Write the initial cold outreach email now."""
 
     def _build_followup_prompt(self, lead: Lead, step: int) -> str:
@@ -185,7 +200,7 @@ Keep it very short. Add a new angle or value point. Don't be pushy."""
         data = self._parse_json_response(response.content[0].text)
         record = OutreachRecord(
             type="email",
-            subject=data["subject"],
+            subject=self._normalize_subject(data["subject"], lead),
             body=self._format_body(data["body"], lead),
             sequence_step=0,
         )
@@ -213,7 +228,7 @@ Keep it very short. Add a new angle or value point. Don't be pushy."""
         data = self._parse_json_response(response.content[0].text)
         record = OutreachRecord(
             type="email",
-            subject=data["subject"],
+            subject=self._normalize_subject(data["subject"], lead),
             body=self._format_body(data["body"], lead),
             sequence_step=step,
         )
@@ -221,16 +236,143 @@ Keep it very short. Add a new angle or value point. Don't be pushy."""
         logger.info(f"Drafted follow-up #{step} for {lead.display_name}")
         return record
 
+    def _person_name_forms(self, lead: Lead) -> dict[str, str]:
+        """First/last/display name tokens — always title-cased from the lead record."""
+        forms: dict[str, str] = {}
+
+        def add_token(token: str) -> None:
+            token = token.strip()
+            if len(token) < 2:
+                return
+            key = token.lower()
+            if key not in forms:
+                forms[key] = token
+
+        for name in (
+            lead.contact.first_name,
+            lead.contact.last_name,
+            lead.contact.full_name,
+            lead.display_name,
+        ):
+            if name:
+                for word in re.findall(r"[\w']+", name):
+                    add_token(word)
+
+        return forms
+
+    def _company_name_forms(self, lead: Lead) -> dict[str, str]:
+        """Company name tokens — title case from the lead when not written as an acronym."""
+        forms: dict[str, str] = {}
+        if lead.company.name:
+            for word in re.findall(r"[\w']+", lead.company.name):
+                word = word.strip()
+                if len(word) >= 2:
+                    key = word.lower()
+                    if key not in forms:
+                        forms[key] = word
+        return forms
+
+    def _acronym_forms_from_subject(self, subject: str, lead: Lead) -> dict[str, str]:
+        """All-caps tokens from the model (ACME, B2B) — not person names like JANE."""
+        person_keys = set(self._person_name_forms(lead).keys())
+        forms: dict[str, str] = {}
+        for word in re.findall(r"[\w']+", subject):
+            letters = [c for c in word if c.isalpha()]
+            if len(letters) < 2 or not all(c.isupper() for c in letters):
+                continue
+            key = word.lower()
+            if key in person_keys or key in forms:
+                continue
+            forms[key] = word
+        return forms
+
+    def _apply_token_forms(self, text: str, forms: dict[str, str]) -> str:
+        for token_lower, token_proper in forms.items():
+            text = re.sub(
+                rf"\b{re.escape(token_lower)}\b",
+                token_proper,
+                text,
+                flags=re.IGNORECASE,
+            )
+        return text
+
+    def _normalize_subject(self, subject: str, lead: Lead) -> str:
+        """Apply config-driven subject casing without changing wording.
+
+        Sentence-case lowercases Title Case noise but restores prospect names
+        from the lead record and all-caps acronyms from the model output
+        (e.g. "ACME", "B2B") so intentional casing survives normalization.
+        """
+        subject = (subject or "").strip()
+        if not subject:
+            return subject
+        casing = (self.config.outreach.subject_casing or "sentence").strip().lower()
+        if casing == "lowercase":
+            return subject.lower()
+        # sentence-case: lowercase all, capitalize first character
+        lowered = subject.lower()
+        result = lowered[0].upper() + lowered[1:] if len(lowered) > 1 else lowered.upper()
+        result = self._apply_token_forms(result, self._company_name_forms(lead))
+        # Model's all-caps acronyms win over company title case (ACME vs Acme).
+        result = self._apply_token_forms(
+            result, self._acronym_forms_from_subject(subject, lead)
+        )
+        # Person names always use lead-record casing (Jane, not JANE).
+        result = self._apply_token_forms(result, self._person_name_forms(lead))
+        return result
+
+    def _strip_model_signoff(self, body: str) -> str:
+        """Remove model-generated sign-offs so only the deterministic footer signs."""
+        lines = body.splitlines()
+        signoff_words = {
+            "best", "regards", "thanks", "thank you", "cheers", "sincerely",
+            "warm regards", "kind regards", "best regards",
+        }
+        op_name = self.config.operator_name.strip().lower()
+        op_first = op_name.split()[0] if op_name else ""
+
+        while lines:
+            last = lines[-1].strip()
+            if not last:
+                lines.pop()
+                continue
+            low = last.lower().rstrip(",")
+            if low in signoff_words or low == op_name or (op_first and low == op_first):
+                lines.pop()
+                continue
+            break
+        return "\n".join(lines).rstrip()
+
+    def _footer_link_lines(self) -> list[str]:
+        """Plain visible URLs for the deterministic footer (display URL = actual URL)."""
+        outreach = self.config.outreach
+        lines: list[str] = []
+        booking = (outreach.booking_url or "").strip()
+        if booking:
+            lines.append(booking)
+        for url in outreach.footer_links:
+            u = (url or "").strip()
+            if u and u not in lines:
+                lines.append(u)
+        return lines
+
     def _format_body(self, body: str, lead: Lead) -> str:
-        """Append signature to email body.
+        """Append signature and config-driven footer links to email body.
 
         Signatures use operator identity only — cold outreach is sent from the
         human operator, not the agent persona (agent_name/agent_email).
         """
+        body = self._strip_model_signoff(body.strip())
         sig = self.config.outreach.signature.format(
             operator_name=self.config.operator_name,
             operator_title=self.config.operator_title,
             operator_email=self.config.operator_email,
             client_name=self.config.client_name,
-        )
-        return f"{body.strip()}\n\n{sig.strip()}" if sig else body
+        ).strip()
+        link_lines = self._footer_link_lines()
+        parts = [body]
+        if sig:
+            parts.append(sig)
+        if link_lines:
+            parts.append("\n".join(link_lines))
+        return "\n\n".join(parts) if parts[0] or len(parts) > 1 else body
