@@ -152,14 +152,27 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="score_leads",
-            description="Run AI scoring on unscored leads in the database.",
+            description=(
+                "Run AI scoring on leads against your ICP. Pass lead_id or lead_ids "
+                "to score exactly those records regardless of pipeline status; "
+                "otherwise scores up to limit unscored leads in status=new."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "lead_id": {
+                        "type": "string",
+                        "description": "A single lead ID to score.",
+                    },
+                    "lead_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Multiple lead IDs to score in one call.",
+                    },
                     "limit": {
                         "type": "integer",
-                        "description": "Max leads to score in this batch (default 20)",
-                    }
+                        "description": "If neither lead_id nor lead_ids is given, score up to this many leads in status=new (default 20).",
+                    },
                 },
             },
         ),
@@ -478,19 +491,50 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     elif name == "score_leads":
         limit = arguments.get("limit", 20)
 
-        unscored = await db.list(status=LeadStatus.NEW, limit=limit)
-        scorer = SCORER_CLASS(config, keys)
-        scored = await scorer.score_batch(unscored)
+        # Resolve target lead ids: explicit id(s), else sweep status=new.
+        ids: list[str] = []
+        if arguments.get("lead_id"):
+            ids.append(arguments["lead_id"])
+        if arguments.get("lead_ids"):
+            ids.extend(arguments["lead_ids"])
 
-        for lead in unscored:
+        not_found: list[str] = []
+        if ids:
+            leads = []
+            for lead_id in ids:
+                lead = await db.get(lead_id)
+                if lead:
+                    leads.append(lead)
+                else:
+                    not_found.append(lead_id)
+        else:
+            leads = await db.list(status=LeadStatus.NEW, limit=limit)
+
+        if not leads:
+            payload: dict = {
+                "leads_scored": 0,
+                "passed_threshold": 0,
+                "threshold": config.scoring.threshold,
+            }
+            if not_found:
+                payload["not_found"] = not_found
+            return [TextContent(type="text", text=json.dumps(payload))]
+
+        scorer = SCORER_CLASS(config, keys)
+        scored = await scorer.score_batch(leads)
+
+        for lead in leads:
             lead.status = LeadStatus.SCORED
             await db.upsert(lead)
 
-        return [TextContent(type="text", text=json.dumps({
-            "leads_scored": len(unscored),
+        payload = {
+            "leads_scored": len(leads),
             "passed_threshold": len(scored),
             "threshold": config.scoring.threshold,
-        }))]
+        }
+        if not_found:
+            payload["not_found"] = not_found
+        return [TextContent(type="text", text=json.dumps(payload))]
 
     elif name == "draft_outreach":
         drafter = DRAFTER_CLASS(config, keys)
