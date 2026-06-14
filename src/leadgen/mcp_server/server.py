@@ -37,6 +37,12 @@ from leadgen.models import LeadStatus
 
 logger = logging.getLogger(__name__)
 
+
+def _json(obj) -> list[TextContent]:
+    """Serialize tool output; mode='json' on model dumps keeps datetimes safe."""
+    return [TextContent(type="text", text=json.dumps(obj, indent=2))]
+
+
 # ── Server init ───────────────────────────────────────────────────────────────
 
 app = Server("leadgen")
@@ -202,6 +208,34 @@ async def list_tools() -> list[Tool]:
                     "lead_id": {"type": "string", "description": "Lead ID to approve outreach for"},
                 },
                 "required": ["lead_id"],
+            },
+        ),
+        Tool(
+            name="send_test_draft",
+            description=(
+                "Send a draft outreach email to a test inbox (e.g. your own address) "
+                "for preview. Does NOT send to the prospect, does NOT modify the lead "
+                "record, and does NOT mark the draft as sent. Uses the same SMTP/HTML "
+                "rendering as production sends. Real prospect sends still require "
+                "approve_outreach plus the leadgen send CLI."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "lead_id": {
+                        "type": "string",
+                        "description": "Lead whose draft to preview-send",
+                    },
+                    "test_recipient": {
+                        "type": "string",
+                        "description": "Email address to deliver the test to (required)",
+                    },
+                    "outreach_id": {
+                        "type": "string",
+                        "description": "Optional OutreachRecord id; defaults to the latest draft",
+                    },
+                },
+                "required": ["lead_id", "test_recipient"],
             },
         ),
         Tool(
@@ -556,11 +590,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 "lead_id": lead.id,
                 "name": lead.display_name,
                 "company": lead.company.name,
+                "outreach_id": record.id,
                 "subject": record.subject,
-                "body_preview": record.body[:200] + "...",
+                "body": record.body,
+                "body_preview": record.body[:200] + ("..." if len(record.body) > 200 else ""),
             })
 
-        return [TextContent(type="text", text=json.dumps(drafted, indent=2))]
+        return _json(drafted)
 
     elif name == "approve_outreach":
         lead = await db.get(arguments["lead_id"])
@@ -573,10 +609,66 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
         lead.touch()
         await db.upsert(lead)
-        return [TextContent(type="text", text=json.dumps({
+        return _json({
             "approved": len(pending),
             "lead": lead.display_name,
-        }))]
+        })
+
+    elif name == "send_test_draft":
+        from leadgen.outreach.email import EmailSender
+
+        lead = await db.get(arguments["lead_id"])
+        if not lead:
+            return _json({"error": "Lead not found"})
+
+        test_recipient = arguments["test_recipient"].strip()
+        if not test_recipient:
+            return _json({"error": "test_recipient is required"})
+
+        outreach_id = arguments.get("outreach_id")
+        if outreach_id:
+            record = next(
+                (r for r in lead.outreach_history if r.id == outreach_id), None
+            )
+            if not record:
+                return _json({"error": f"No outreach record with id {outreach_id}"})
+        elif lead.outreach_history:
+            record = lead.outreach_history[-1]
+        else:
+            return _json({"error": "Lead has no draft outreach to preview"})
+
+        email_before = lead.contact.email
+        status_before = lead.status.value
+        sent_at_before = record.sent_at
+
+        sender = EmailSender(config, keys, db, dry_run=arguments.get("dry_run", False))
+        ok = await sender.send_test_draft(
+            subject=record.subject or "(no subject)",
+            body=record.body,
+            test_recipient=test_recipient,
+            to_name=lead.display_name,
+        )
+
+        # Re-read lead to confirm the test send did not mutate persisted state.
+        after = await db.get(lead.id)
+        if after is None:
+            return _json({"error": "Lead disappeared after test send"})
+
+        after_record = next((r for r in after.outreach_history if r.id == record.id), None)
+
+        return _json({
+            "test_sent": ok,
+            "test_recipient": test_recipient,
+            "lead_id": lead.id,
+            "outreach_id": record.id,
+            "subject_sent": f"[TEST] {record.subject or '(no subject)'}",
+            "lead_unchanged": (
+                after.contact.email == email_before
+                and after.status.value == status_before
+                and after_record is not None
+                and after_record.sent_at == sent_at_before
+            ),
+        })
 
     elif name == "update_lead":
         from leadgen.crm.update_lead import update_lead as apply_update_lead
@@ -629,9 +721,9 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     elif name == "get_lead_detail":
         lead = await db.get(arguments["lead_id"])
         if not lead:
-            return [TextContent(type="text", text=json.dumps({"error": "Lead not found"}))]
+            return _json({"error": "Lead not found"})
 
-        return [TextContent(type="text", text=json.dumps({
+        return _json({
             "id": lead.id,
             "name": lead.display_name,
             "title": lead.contact.title,
@@ -641,11 +733,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             "industry": lead.company.industry,
             "employees": lead.company.employee_count,
             "location": f"{lead.company.city}, {lead.company.state}",
-            "score": lead.score.model_dump() if lead.score else None,
+            "score": lead.score.model_dump(mode="json") if lead.score else None,
             "status": lead.status.value,
             "outreach_count": len(lead.outreach_history),
+            "outreach_history": [
+                r.model_dump(mode="json") for r in lead.outreach_history
+            ],
             "notes": lead.notes,
-        }, indent=2))]
+        })
 
     return [TextContent(type="text", text=json.dumps({"error": f"Unknown tool: {name}"}))]
 
