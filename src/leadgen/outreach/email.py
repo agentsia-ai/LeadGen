@@ -109,6 +109,28 @@ class EmailSender:
 
         return success
 
+    async def send_test_draft(
+        self,
+        *,
+        subject: str,
+        body: str,
+        test_recipient: str,
+        to_name: str = "Test Recipient",
+    ) -> bool:
+        """Send a draft to an arbitrary address for operator preview.
+
+        Does not update lead records, daily send counters, or outreach
+        sent_at/approved_at. Uses the same SMTP/SendGrid + HTML rendering
+        path as production sends.
+        """
+        test_subject = f"[TEST] {subject or '(no subject)'}"
+        return await self._send(
+            to_email=test_recipient,
+            to_name=to_name,
+            subject=test_subject,
+            body=body,
+        )
+
     async def send_batch(self, leads: list[Lead]) -> dict:
         """
         Send approved outreach for a list of leads.
