@@ -5,9 +5,11 @@ from __future__ import annotations
 from leadgen.config.loader import (
     APIKeys,
     LeadGenConfig,
+    OutreachConfig,
     display_agent_name,
+    outbound_from_email,
+    outbound_from_name,
     operator_from_email,
-    operator_from_name,
 )
 
 
@@ -23,7 +25,7 @@ def test_display_agent_name_falls_back_to_engine_name() -> None:
     assert display_agent_name(cfg) == "Lead Gen Assistant"
 
 
-def test_operator_from_email_prefers_config_when_env_blank() -> None:
+def test_outbound_from_email_uses_operator_by_default() -> None:
     cfg = LeadGenConfig(
         client_name="Example Co",
         operator_name="Pat Operator",
@@ -32,28 +34,36 @@ def test_operator_from_email_prefers_config_when_env_blank() -> None:
         agent_email="bot@example.com",
     )
     keys = APIKeys()
+    assert outbound_from_email(cfg, keys) == "pat@example.com"
     assert operator_from_email(cfg, keys) == "pat@example.com"
 
 
-def test_operator_from_email_env_override() -> None:
+def test_outbound_from_email_ignores_smtp_from_env_override() -> None:
+    """SMTP_FROM_EMAIL is for auth routing — config operator_email is the From line."""
     cfg = LeadGenConfig(
         client_name="Example Co",
         operator_name="Pat Operator",
         operator_title="Founder",
         operator_email="pat@example.com",
+        agent_email="bot@example.com",
     )
     keys = APIKeys()
-    keys.smtp_from_email = "mailbox@example.com"
-    assert operator_from_email(cfg, keys) == "mailbox@example.com"
+    keys.smtp_from_email = "bot@example.com"
+    keys.smtp_from_name = "Bot Persona"
+    assert outbound_from_email(cfg, keys) == "pat@example.com"
+    assert outbound_from_name(cfg, keys) == "Pat Operator"
 
 
-def test_operator_from_name_uses_operator_not_agent() -> None:
+def test_outbound_from_email_agent_identity_when_configured() -> None:
     cfg = LeadGenConfig(
         client_name="Example Co",
         operator_name="Pat Operator",
         operator_title="Founder",
         operator_email="pat@example.com",
-        agent_name="Lead Gen Assistant",
+        agent_name="Rex",
+        agent_email="bot@example.com",
+        outreach=OutreachConfig(from_identity="agent"),
     )
     keys = APIKeys()
-    assert operator_from_name(cfg, keys) == "Pat Operator"
+    assert outbound_from_email(cfg, keys) == "bot@example.com"
+    assert outbound_from_name(cfg, keys) == "Rex | Example Co"

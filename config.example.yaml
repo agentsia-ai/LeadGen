@@ -92,8 +92,20 @@ outreach:
   # Require human approval before sending? Recommended: true.
   require_approval: true
 
+  # From/Reply-To identity for cold outreach: "operator" or "agent".
+  from_identity: "operator"
+
+  # Subject casing after drafting: "sentence" (default) or "lowercase".
+  subject_casing: "sentence"
+
+  # Plain visible footer URLs (display URL = actual URL, no shorteners).
+  booking_url: ""
+  footer_links: []
+
   # Email signature template. {operator_name}, {operator_title},
-  # {operator_email} are substituted at runtime.
+  # {operator_email} are substituted at runtime. Sign-off lives here —
+  # the model must not generate one. Footer links and compliance lines are
+  # appended by the engine.
   signature: |
     Best,
     {operator_name}

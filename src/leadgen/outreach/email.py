@@ -18,7 +18,7 @@ from typing import Optional
 
 import aiosmtplib
 
-from leadgen.config.loader import APIKeys, LeadGenConfig, operator_from_email, operator_from_name
+from leadgen.config.loader import APIKeys, LeadGenConfig, outbound_from_email, outbound_from_name
 from leadgen._time import now_utc
 from leadgen.crm.database import LeadDatabase
 from leadgen.models import Lead, LeadStatus, OutreachRecord
@@ -208,8 +208,8 @@ class EmailSender:
         """Send via SMTP (Gmail, Outlook, custom domain, etc.)"""
         keys = self.keys
         cfg = self.config
-        from_addr = operator_from_email(cfg, keys)
-        from_name = operator_from_name(cfg, keys)
+        from_addr = outbound_from_email(cfg, keys)
+        from_name = outbound_from_name(cfg, keys)
 
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
@@ -228,6 +228,7 @@ class EmailSender:
         try:
             await aiosmtplib.send(
                 msg,
+                sender=from_addr,
                 hostname=keys.smtp_host,
                 port=keys.smtp_port,
                 username=keys.smtp_username,
@@ -255,16 +256,17 @@ class EmailSender:
 
         def _do_send() -> bool:
             import sendgrid
-            from sendgrid.helpers.mail import Mail, Content, To
+            from sendgrid.helpers.mail import Mail, Content, To, ReplyTo
 
             sg = sendgrid.SendGridAPIClient(api_key=self.keys.sendgrid)
-            from_addr = operator_from_email(self.config, self.keys)
-            from_name = operator_from_name(self.config, self.keys)
+            from_addr = outbound_from_email(self.config, self.keys)
+            from_name = outbound_from_name(self.config, self.keys)
             message = Mail(
                 from_email=(from_addr, from_name),
                 to_emails=To(to_email, to_name),
                 subject=subject,
             )
+            message.reply_to = ReplyTo(from_addr, from_name)
             message.add_content(Content("text/plain", body))
 
             html_body = body.replace("\n\n", "</p><p>").replace("\n", "<br>")

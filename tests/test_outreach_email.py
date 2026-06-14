@@ -199,8 +199,8 @@ async def test_send_smtp_uses_operator_email_for_from_and_reply_to(
     test_config.operator_name = "Pat Operator"
     test_config.operator_email = "pat@example.com"
     test_config.agent_email = "bot@example.com"
-    test_keys.smtp_from_email = ""
-    test_keys.smtp_from_name = ""
+    test_keys.smtp_from_email = "bot@example.com"
+    test_keys.smtp_from_name = "Bot Persona"
     test_keys.smtp_username = "user"
     test_keys.smtp_password = "pass"
 
@@ -216,6 +216,8 @@ async def test_send_smtp_uses_operator_email_for_from_and_reply_to(
     )
     assert ok is True
     assert "pat@example.com" in captured["From"]
+    assert "Pat Operator" in captured["From"]
     assert captured["Reply-To"] == "pat@example.com"
     assert "bot@example.com" not in captured["From"]
     assert "bot@example.com" not in captured["Reply-To"]
+    assert "Bot Persona" not in captured["From"]

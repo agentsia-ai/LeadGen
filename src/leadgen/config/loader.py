@@ -45,6 +45,13 @@ class OutreachConfig(BaseModel):
     follow_up_days: list[int] = [3, 7, 14]
     max_follow_ups: int = 3
     require_approval: bool = True
+    # Cold outreach From/Reply-To identity: "operator" (human) or "agent" (persona).
+    from_identity: str = "operator"
+    # Subject casing applied after the model drafts: "sentence" or "lowercase".
+    subject_casing: str = "sentence"
+    # Plain visible URLs appended to the deterministic footer (not anchor text).
+    booking_url: str = ""
+    footer_links: list[str] = []
     signature: str = ""
 
 
@@ -146,18 +153,40 @@ def display_agent_name(config: LeadGenConfig) -> str:
     return name or "leadgen"
 
 
-def operator_from_email(config: LeadGenConfig, keys: APIKeys) -> str:
-    """From/Reply-To address for outbound mail — human operator only.
+def outbound_from_email(config: LeadGenConfig, keys: APIKeys) -> str:
+    """From/Reply-To/envelope address for outbound cold outreach.
 
-    Cold outreach is sent from the operator (e.g. robert@…), never agent_email.
-    SMTP_FROM_EMAIL in .env overrides when set for mailbox routing.
+    Identity is config-driven via outreach.from_identity (operator vs agent).
+    SMTP_FROM_EMAIL is not used for the visible From header — operator/agent
+    fields in config.yaml are authoritative so agent mailboxes used for SMTP
+    auth do not leak into the From line.
     """
-    return (keys.smtp_from_email or config.operator_email).strip()
+    identity = (config.outreach.from_identity or "operator").strip().lower()
+    if identity == "agent":
+        return (config.agent_email or config.operator_email).strip()
+    return config.operator_email.strip()
+
+
+def outbound_from_name(config: LeadGenConfig, keys: APIKeys) -> str:
+    """Display name on the From header — config-driven operator or agent persona."""
+    identity = (config.outreach.from_identity or "operator").strip().lower()
+    if identity == "agent":
+        agent = (config.agent_name or "").strip()
+        client = (config.client_name or "").strip()
+        if agent and client:
+            return f"{agent} | {client}"
+        return agent or config.operator_name.strip()
+    return config.operator_name.strip()
+
+
+def operator_from_email(config: LeadGenConfig, keys: APIKeys) -> str:
+    """Alias for outbound_from_email — cold outreach uses config identity only."""
+    return outbound_from_email(config, keys)
 
 
 def operator_from_name(config: LeadGenConfig, keys: APIKeys) -> str:
-    """Display name on the From header — human operator, not the agent persona."""
-    return (keys.smtp_from_name or config.operator_name).strip()
+    """Alias for outbound_from_name — cold outreach uses config identity only."""
+    return outbound_from_name(config, keys)
 
 
 def load_config(config_path: str | Path | None = None) -> LeadGenConfig:
