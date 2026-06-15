@@ -19,7 +19,7 @@ from leadgen.models import (
     LeadStatus,
     OutreachRecord,
 )
-from leadgen.outreach.email import DailyLimitReached, EmailSender
+from leadgen.outreach.email import DailyLimitReached, EmailSender, plain_text_body_to_html
 
 
 def _approve(record: OutreachRecord) -> OutreachRecord:
@@ -221,3 +221,13 @@ async def test_send_smtp_uses_operator_email_for_from_and_reply_to(
     assert "bot@example.com" not in captured["From"]
     assert "bot@example.com" not in captured["Reply-To"]
     assert "Bot Persona" not in captured["From"]
+
+
+def test_plain_text_body_to_html_preserves_paragraph_breaks() -> None:
+    body = "Hi Jane,\n\nFirst paragraph.\n\nSecond paragraph."
+    html = plain_text_body_to_html(body)
+    assert html.count("<p>") == 3
+    assert "<p>Hi Jane,</p>" in html
+    assert "<p>First paragraph.</p>" in html
+    assert "<p>Second paragraph.</p>" in html
+    assert "</p><p>" in html

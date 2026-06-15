@@ -26,6 +26,15 @@ from leadgen.models import Lead, LeadStatus, OutreachRecord
 logger = logging.getLogger(__name__)
 
 
+def plain_text_body_to_html(body: str) -> str:
+    """Render plain-text email body as HTML with one paragraph per blank-line break."""
+    paragraphs = [p for p in body.split("\n\n") if p.strip()]
+    html_paras = [
+        f"<p>{para.strip().replace(chr(10), '<br>')}</p>" for para in paragraphs
+    ]
+    return f"<html><body>{''.join(html_paras)}</body></html>"
+
+
 class DailyLimitReached(Exception):
     """Raised when the configured daily send limit has been hit."""
     pass
@@ -220,10 +229,8 @@ class EmailSender:
         # Plain text version
         msg.attach(MIMEText(body, "plain"))
 
-        # HTML version (simple — wrap in basic template)
-        html_body = body.replace("\n\n", "</p><p>").replace("\n", "<br>")
-        html = f"<html><body><p>{html_body}</p></body></html>"
-        msg.attach(MIMEText(html, "html"))
+        # HTML version — one <p> per blank-line paragraph break
+        msg.attach(MIMEText(plain_text_body_to_html(body), "html"))
 
         try:
             await aiosmtplib.send(
@@ -268,9 +275,7 @@ class EmailSender:
             )
             message.reply_to = ReplyTo(from_addr, from_name)
             message.add_content(Content("text/plain", body))
-
-            html_body = body.replace("\n\n", "</p><p>").replace("\n", "<br>")
-            message.add_content(Content("text/html", f"<html><body><p>{html_body}</p></body></html>"))
+            message.add_content(Content("text/html", plain_text_body_to_html(body)))
 
             response = sg.client.mail.send.post(request_body=message.get())
 

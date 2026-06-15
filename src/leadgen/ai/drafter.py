@@ -43,8 +43,9 @@ sender's configured value prop/proof points. Never invent clients, case studies,
 testimonials, statistics about other customers, or unverified "I noticed…"
 claims. Stay generic when you lack a verifiable specific.
 
-End the body with the last message sentence — no sign-off or name. The engine
-appends the signature block.
+Do not include a greeting line — the engine prepends one from config. End the
+body with the last message sentence — no sign-off or name. The engine appends
+the signature block.
 
 Return ONLY the email content in this JSON format:
 {
@@ -149,7 +150,8 @@ ICP Score Reasoning: {lead.score.reasoning if lead.score else 'Not scored'}
 === VERIFICATION RULES ===
 Only use concrete facts from PROSPECT INFO or SENDER INFO above. Never invent
 clients, case studies, testimonials, customer statistics, or "I saw/noticed"
-claims. End the body without a sign-off — the engine appends the signature.
+claims. Do not include a greeting — the engine prepends one. End the body
+without a sign-off — the engine appends the signature.
 
 Write the initial cold outreach email now."""
 
@@ -260,6 +262,21 @@ Keep it very short. Add a new angle or value point. Don't be pushy."""
 
         return forms
 
+    def _restore_company_name_phrase(self, text: str, lead: Lead) -> str:
+        """Restore multi-word company names using stored casing from the lead record."""
+        name = (lead.company.name or "").strip()
+        if not name:
+            return text
+        words = re.findall(r"[\w']+", name)
+        if len(words) < 2:
+            return text
+        pattern = (
+            r"(?<!\w)"
+            + r"\s+".join(re.escape(w) for w in words)
+            + r"(?!\w)"
+        )
+        return re.sub(pattern, lambda _m: name, text, flags=re.IGNORECASE)
+
     def _company_name_forms(self, lead: Lead) -> dict[str, str]:
         """Company name tokens — title case from the lead when not written as an acronym."""
         forms: dict[str, str] = {}
@@ -312,6 +329,7 @@ Keep it very short. Add a new angle or value point. Don't be pushy."""
         # sentence-case: lowercase all, capitalize first character
         lowered = subject.lower()
         result = lowered[0].upper() + lowered[1:] if len(lowered) > 1 else lowered.upper()
+        result = self._restore_company_name_phrase(result, lead)
         result = self._apply_token_forms(result, self._company_name_forms(lead))
         # Model's all-caps acronyms win over company title case (ACME vs Acme).
         result = self._apply_token_forms(
@@ -320,6 +338,57 @@ Keep it very short. Add a new angle or value point. Don't be pushy."""
         # Person names always use lead-record casing (Jane, not JANE).
         result = self._apply_token_forms(result, self._person_name_forms(lead))
         return result
+
+    def _build_greeting(self, lead: Lead) -> str:
+        """Deterministic opening line from config (e.g. 'Hi {first_name},')."""
+        fmt = (self.config.outreach.greeting_format or "").strip()
+        if not fmt:
+            return ""
+        first = (lead.contact.first_name or "").strip()
+        if not first and lead.display_name:
+            first = lead.display_name.split()[0]
+        if not first:
+            return ""
+        return fmt.format(first_name=first)
+
+    def _strip_model_greeting(self, body: str, lead: Lead) -> str:
+        """Remove model-generated opening greetings so the engine owns the salutation."""
+        body = body.strip()
+        if not body:
+            return body
+        first = (lead.contact.first_name or "").strip()
+        if not first and lead.display_name:
+            first = lead.display_name.split()[0]
+        if not first:
+            return body
+
+        lines = body.splitlines()
+        while lines:
+            line = lines[0].strip()
+            if not line:
+                lines.pop(0)
+                continue
+            low = line.lower().rstrip(",")
+            if low in (first.lower(), f"hi {first.lower()}", f"hey {first.lower()}"):
+                lines.pop(0)
+                while lines and not lines[0].strip():
+                    lines.pop(0)
+                continue
+            # Run-on: "Hi Jane, Saw your post..." on one line
+            for prefix in (
+                rf"^hi\s+{re.escape(first)}\s*,?\s*",
+                rf"^hey\s+{re.escape(first)}\s*,?\s*",
+                rf"^{re.escape(first)}\s*,?\s*",
+            ):
+                stripped = re.sub(prefix, "", line, count=1, flags=re.IGNORECASE).strip()
+                if stripped != line:
+                    if stripped:
+                        lines[0] = stripped
+                    else:
+                        lines.pop(0)
+                    break
+            break
+        return "\n".join(lines).strip()
 
     def _strip_model_signoff(self, body: str) -> str:
         """Remove model-generated sign-offs so only the deterministic footer signs."""
@@ -363,6 +432,8 @@ Keep it very short. Add a new angle or value point. Don't be pushy."""
         human operator, not the agent persona (agent_name/agent_email).
         """
         body = self._strip_model_signoff(body.strip())
+        body = self._strip_model_greeting(body, lead)
+        greeting = self._build_greeting(lead)
         sig = self.config.outreach.signature.format(
             operator_name=self.config.operator_name,
             operator_title=self.config.operator_title,
@@ -370,9 +441,13 @@ Keep it very short. Add a new angle or value point. Don't be pushy."""
             client_name=self.config.client_name,
         ).strip()
         link_lines = self._footer_link_lines()
-        parts = [body]
+        parts: list[str] = []
+        if greeting:
+            parts.append(greeting)
+        if body:
+            parts.append(body)
         if sig:
             parts.append(sig)
         if link_lines:
             parts.append("\n".join(link_lines))
-        return "\n\n".join(parts) if parts[0] or len(parts) > 1 else body
+        return "\n\n".join(parts)
