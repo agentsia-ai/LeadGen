@@ -97,6 +97,8 @@ outreach:
 
   # Subject casing after drafting: "sentence" (default) or "lowercase".
   subject_casing: "sentence"
+  # Deterministic greeting prepended to the body. Use {first_name}. Empty disables.
+  greeting_format: "{first_name},"
 
   # Plain visible footer URLs (display URL = actual URL, no shorteners).
   booking_url: ""
