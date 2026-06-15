@@ -49,6 +49,9 @@ class OutreachConfig(BaseModel):
     from_identity: str = "operator"
     # Subject casing applied after the model drafts: "sentence" or "lowercase".
     subject_casing: str = "sentence"
+    # Deterministic opening line prepended to the body. Use {first_name}.
+    # Empty string disables the greeting line. Default: "{first_name},"
+    greeting_format: str = "{first_name},"
     # Plain visible URLs appended to the deterministic footer (not anchor text).
     booking_url: str = ""
     footer_links: list[str] = []

@@ -38,6 +38,44 @@ def test_normalize_subject_sentence_case_preserves_prospect_name(
     assert d._normalize_subject("Quick Question, JANE", sample_lead) == "Quick question, Jane"
 
 
+def test_normalize_subject_sentence_case_preserves_multi_word_company(
+    test_config, test_keys, sample_lead
+) -> None:
+    test_config.outreach.subject_casing = "sentence"
+    d = OutreachDrafter(test_config, test_keys)
+    sample_lead.company.name = "Matrix Realty"
+    assert d._normalize_subject("Save matrix realty hours weekly", sample_lead) == (
+        "Save Matrix Realty hours weekly"
+    )
+
+
+def test_deterministic_greeting_prepended(test_config, test_keys, sample_lead) -> None:
+    test_config.outreach.greeting_format = "Hi {first_name},"
+    test_config.outreach.signature = "{operator_email}"
+    d = OutreachDrafter(test_config, test_keys)
+    body = d._format_body("Saw Acme is hiring SDRs.", sample_lead)
+    assert body.startswith("Hi Jane,\n\nSaw Acme is hiring SDRs.")
+
+
+def test_model_greeting_stripped_before_deterministic_greeting(
+    test_config, test_keys, sample_lead
+) -> None:
+    test_config.outreach.greeting_format = "Hi {first_name},"
+    test_config.outreach.signature = ""
+    d = OutreachDrafter(test_config, test_keys)
+    body = d._format_body("Hi Jane,\n\nSaw Acme is hiring SDRs.", sample_lead)
+    assert body.startswith("Hi Jane,\n\nSaw Acme is hiring SDRs.")
+    assert body.count("Hi Jane,") == 1
+
+
+def test_runon_model_greeting_stripped(test_config, test_keys, sample_lead) -> None:
+    test_config.outreach.greeting_format = "Hi {first_name},"
+    test_config.outreach.signature = ""
+    d = OutreachDrafter(test_config, test_keys)
+    body = d._format_body("Hi Jane, Saw Acme is hiring SDRs.", sample_lead)
+    assert body == "Hi Jane,\n\nSaw Acme is hiring SDRs."
+
+
 def test_normalize_subject_lowercase(test_config, test_keys, sample_lead) -> None:
     test_config.outreach.subject_casing = "lowercase"
     d = OutreachDrafter(test_config, test_keys)
@@ -51,7 +89,7 @@ def test_strip_model_signoff_removes_name_and_best(test_config, test_keys, sampl
     d = OutreachDrafter(test_config, test_keys)
     body = d._format_body("Main point here.\n\nBest,\nTester", sample_lead)
     assert body.count("Best,") == 1
-    assert body.startswith("Main point here.")
+    assert body.startswith("Jane,\n\nMain point here.")
     assert body.endswith("Tester")
 
 

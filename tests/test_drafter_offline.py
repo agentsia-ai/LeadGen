@@ -124,4 +124,4 @@ def test_format_body_applies_operator_fields_into_signature(
     assert "Tester" in formatted
     assert "Founder" in formatted
     assert "tester@example.com" in formatted
-    assert formatted.startswith("Hey Jane,")
+    assert formatted.startswith("Jane,\n\n")
