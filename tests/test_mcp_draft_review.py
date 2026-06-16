@@ -13,6 +13,9 @@ from leadgen.models import LeadStatus, OutreachRecord, ScoringBreakdown
 
 @pytest.fixture
 def mcp_env(initialized_db, test_config, test_keys, monkeypatch):
+    test_keys.smtp_host = "smtp.test.com"
+    test_keys.smtp_username = "smtp-user"
+    test_keys.smtp_password = "smtp-pass"
     monkeypatch.setattr(mcp_server, "config", test_config)
     monkeypatch.setattr(mcp_server, "keys", test_keys)
     monkeypatch.setattr(mcp_server, "db", initialized_db)
@@ -101,6 +104,130 @@ async def test_send_test_draft_delivers_without_mutating_lead(
     assert stored.contact.email == scored_lead.contact.email
     assert stored.status == LeadStatus.QUEUED
     assert stored.outreach_history[0].sent_at is None
+
+
+@pytest.mark.asyncio
+async def test_send_outreach_requires_lead_id(mcp_env) -> None:
+    result = await mcp_server.call_tool("send_outreach", {})
+    payload = json.loads(result[0].text)
+    assert "lead_id is required" in payload["error"]
+
+
+@pytest.mark.asyncio
+async def test_send_outreach_refuses_unapproved(mcp_env, scored_lead) -> None:
+    record = OutreachRecord(subject="Hello", body="Draft body", sequence_step=0)
+    scored_lead.outreach_history = [record]
+    scored_lead.status = LeadStatus.QUEUED
+    await mcp_env.upsert(scored_lead)
+
+    result = await mcp_server.call_tool(
+        "send_outreach", {"lead_id": scored_lead.id}
+    )
+    payload = json.loads(result[0].text)
+
+    assert "not approved" in payload["error"]
+    stored = await mcp_env.get(scored_lead.id)
+    assert stored.outreach_history[0].sent_at is None
+
+
+@pytest.mark.asyncio
+async def test_send_outreach_refuses_already_sent(mcp_env, scored_lead) -> None:
+    record = OutreachRecord(
+        subject="Hello",
+        body="Draft body",
+        sequence_step=0,
+        approved_at=now_utc(),
+        sent_at=now_utc(),
+    )
+    scored_lead.outreach_history = [record]
+    scored_lead.status = LeadStatus.CONTACTED
+    await mcp_env.upsert(scored_lead)
+
+    result = await mcp_server.call_tool(
+        "send_outreach", {"lead_id": scored_lead.id}
+    )
+    payload = json.loads(result[0].text)
+
+    assert "already sent" in payload["error"]
+    assert payload["sent_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_send_outreach_refuses_at_daily_cap(
+    mcp_env, scored_lead, test_config, monkeypatch
+) -> None:
+    test_config.outreach.daily_email_limit = 1
+    record = OutreachRecord(
+        subject="Hello",
+        body="Draft body",
+        sequence_step=0,
+        approved_at=now_utc(),
+    )
+    scored_lead.outreach_history = [record]
+    scored_lead.status = LeadStatus.QUEUED
+    await mcp_env.upsert(scored_lead)
+
+    async def fake_sync(self):
+        self._sent_today = 1
+        return 1
+
+    monkeypatch.setattr(
+        "leadgen.outreach.email.EmailSender.sync_sent_today",
+        fake_sync,
+    )
+
+    result = await mcp_server.call_tool(
+        "send_outreach", {"lead_id": scored_lead.id}
+    )
+    payload = json.loads(result[0].text)
+
+    assert "Daily send limit reached" in payload["error"]
+    assert payload["remaining"] == 0
+
+
+@pytest.mark.asyncio
+async def test_send_outreach_sends_approved_and_returns_audit_fields(
+    mcp_env, scored_lead, monkeypatch
+) -> None:
+    record = OutreachRecord(
+        subject="Hello",
+        body="Production body",
+        sequence_step=0,
+        approved_at=now_utc(),
+    )
+    scored_lead.outreach_history = [record]
+    scored_lead.status = LeadStatus.QUEUED
+    await mcp_env.upsert(scored_lead)
+
+    sent_to: list[str] = []
+
+    async def fake_send(self, to_email, to_name, subject, body):
+        sent_to.append(to_email)
+        assert subject == "Hello"
+        assert body == "Production body"
+        return True
+
+    monkeypatch.setattr(
+        "leadgen.outreach.email.EmailSender._send",
+        fake_send,
+    )
+
+    result = await mcp_server.call_tool(
+        "send_outreach",
+        {"lead_id": scored_lead.id, "dry_run": False},
+    )
+    payload = json.loads(result[0].text)
+
+    assert payload["sent"] is True
+    assert payload["recipient"] == scored_lead.contact.email
+    assert payload["sent_at"] is not None
+    assert payload["status"] == LeadStatus.CONTACTED.value
+    assert payload["outreach_id"] == record.id
+    assert sent_to == [scored_lead.contact.email]
+
+    stored = await mcp_env.get(scored_lead.id)
+    assert stored.status == LeadStatus.CONTACTED
+    assert stored.outreach_history[0].sent_at is not None
 
 
 @pytest.mark.asyncio

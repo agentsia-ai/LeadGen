@@ -211,13 +211,44 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="send_outreach",
+            description=(
+                "Send one APPROVED outreach email to the real prospect (production send). "
+                "Requires an explicit lead_id — one targeted send per call, never a batch "
+                "sweep. The draft must already be approved (approve_outreach) and not yet "
+                "sent. Refuses if the daily send cap would be exceeded. Returns the exact "
+                "recipient address, sent_at, and new lead status."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "lead_id": {
+                        "type": "string",
+                        "description": "Lead to send approved outreach for (required)",
+                    },
+                    "outreach_id": {
+                        "type": "string",
+                        "description": (
+                            "Optional OutreachRecord id; defaults to the first "
+                            "approved, unsent draft on this lead"
+                        ),
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "Simulate send without delivering email",
+                    },
+                },
+                "required": ["lead_id"],
+            },
+        ),
+        Tool(
             name="send_test_draft",
             description=(
                 "Send a draft outreach email to a test inbox (e.g. your own address) "
                 "for preview. Does NOT send to the prospect, does NOT modify the lead "
                 "record, and does NOT mark the draft as sent. Uses the same SMTP/HTML "
-                "rendering as production sends. Real prospect sends still require "
-                "approve_outreach plus the leadgen send CLI."
+                "rendering as production sends. Real prospect sends use send_outreach "
+                "(one lead at a time) or the leadgen send CLI batch sweep."
             ),
             inputSchema={
                 "type": "object",
@@ -613,6 +644,130 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return _json({
             "approved": len(pending),
             "lead": lead.display_name,
+        })
+
+    elif name == "send_outreach":
+        from leadgen.outreach.email import DailyLimitReached, EmailSender
+
+        lead_id = arguments.get("lead_id")
+        if not lead_id:
+            return _json({"error": "lead_id is required — one explicit target per call"})
+
+        lead = await db.get(lead_id)
+        if not lead:
+            return _json({"error": "Lead not found", "lead_id": lead_id})
+
+        outreach_id = arguments.get("outreach_id")
+        if outreach_id:
+            record = next(
+                (r for r in lead.outreach_history if r.id == outreach_id), None
+            )
+            if not record:
+                return _json({
+                    "error": f"No outreach record with id {outreach_id}",
+                    "lead_id": lead_id,
+                })
+        else:
+            record = next(
+                (r for r in lead.outreach_history if r.approved_at and not r.sent_at),
+                None,
+            )
+            if not record:
+                has_unapproved = any(
+                    r for r in lead.outreach_history if not r.approved_at and not r.sent_at
+                )
+                if has_unapproved:
+                    return _json({
+                        "error": "Outreach not approved — call approve_outreach first",
+                        "lead_id": lead_id,
+                    })
+                has_sent = any(r.sent_at for r in lead.outreach_history)
+                if has_sent:
+                    sent_record = next(
+                        r for r in lead.outreach_history if r.sent_at
+                    )
+                    return _json({
+                        "error": "Outreach already sent — refusing duplicate send",
+                        "lead_id": lead_id,
+                        "outreach_id": sent_record.id,
+                        "sent_at": sent_record.sent_at.isoformat(),
+                    })
+                return _json({
+                    "error": "No approved, unsent outreach draft on this lead",
+                    "lead_id": lead_id,
+                })
+
+        if not record.approved_at:
+            return _json({
+                "error": "Outreach not approved — call approve_outreach first",
+                "lead_id": lead_id,
+                "outreach_id": record.id,
+            })
+        if record.sent_at:
+            return _json({
+                "error": "Outreach already sent — refusing duplicate send",
+                "lead_id": lead_id,
+                "outreach_id": record.id,
+                "sent_at": record.sent_at.isoformat(),
+            })
+        if not lead.contact.email:
+            return _json({
+                "error": "Lead has no email address — cannot send",
+                "lead_id": lead_id,
+                "outreach_id": record.id,
+            })
+
+        sender = EmailSender(config, keys, db, dry_run=arguments.get("dry_run", False))
+        if not sender.use_smtp and not sender.use_sendgrid:
+            return _json({
+                "error": "No email backend configured. Set SMTP_* or SENDGRID_API_KEY.",
+                "lead_id": lead_id,
+            })
+
+        await sender.sync_sent_today()
+        remaining = sender.remaining_sends_today()
+        if remaining < 1:
+            return _json({
+                "error": "Daily send limit reached — refusing send",
+                "daily_limit": config.outreach.daily_email_limit,
+                "sent_today": sender._sent_today,
+                "remaining": 0,
+                "lead_id": lead_id,
+            })
+
+        try:
+            ok = await sender.send_approved_record(lead, record)
+        except DailyLimitReached:
+            return _json({
+                "error": "Daily send limit reached — refusing send",
+                "daily_limit": config.outreach.daily_email_limit,
+                "sent_today": sender._sent_today,
+                "remaining": 0,
+                "lead_id": lead_id,
+            })
+
+        if not ok:
+            return _json({
+                "error": "Send failed",
+                "lead_id": lead_id,
+                "outreach_id": record.id,
+            })
+
+        after = await db.get(lead_id)
+        after_record = next(
+            (r for r in after.outreach_history if r.id == record.id), record
+        )
+
+        return _json({
+            "sent": True,
+            "lead_id": lead_id,
+            "outreach_id": record.id,
+            "recipient": after.contact.email,
+            "sent_at": (
+                after_record.sent_at.isoformat() if after_record.sent_at else None
+            ),
+            "status": after.status.value,
+            "remaining_today": sender.remaining_sends_today(),
         })
 
     elif name == "send_test_draft":
