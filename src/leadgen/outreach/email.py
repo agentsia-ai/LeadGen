@@ -82,12 +82,30 @@ class EmailSender:
         Returns True if sent successfully, False otherwise.
         Raises DailyLimitReached if the daily limit has been hit.
         """
-        # Find the next approved, unsent record
         record = self._next_pending_record(lead)
         if not record:
             logger.info(f"No pending approved outreach for {lead.display_name}")
             return False
+        return await self.send_approved_record(lead, record)
 
+    async def send_approved_record(self, lead: Lead, record: OutreachRecord) -> bool:
+        """
+        Send one specific approved, unsent outreach record to the lead's email.
+
+        Returns True if sent successfully, False otherwise.
+        Raises DailyLimitReached if the daily limit has been hit.
+        """
+        if not any(r.id == record.id for r in lead.outreach_history):
+            logger.warning(
+                f"Outreach record {record.id} not on lead {lead.display_name}"
+            )
+            return False
+        if not record.approved_at:
+            logger.info(f"Outreach {record.id} not approved — refusing send")
+            return False
+        if record.sent_at:
+            logger.info(f"Outreach {record.id} already sent — refusing duplicate")
+            return False
         if not lead.contact.email:
             logger.warning(f"No email address for {lead.display_name} — skipping")
             return False
@@ -117,6 +135,10 @@ class EmailSender:
             )
 
         return success
+
+    def remaining_sends_today(self) -> int:
+        """How many sends are left before today's daily_email_limit."""
+        return max(0, self.config.outreach.daily_email_limit - self._sent_today)
 
     async def send_test_draft(
         self,
