@@ -582,6 +582,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         drafted = []
         for lead in leads:
             record = await drafter.draft_initial(lead)
+            lead.supersede_unapproved_drafts_at_step(record.sequence_step)
             lead.outreach_history.append(record)
             lead.status = LeadStatus.QUEUED
             lead.touch()

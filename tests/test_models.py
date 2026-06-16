@@ -24,7 +24,27 @@ def _minimal_lead(**overrides) -> Lead:
     return Lead(source=LeadSource.MANUAL, contact=contact, company=company, **overrides)
 
 
-def test_display_name_prefers_full_name() -> None:
+def test_supersede_unapproved_drafts_at_step_keeps_approved_and_sent() -> None:
+    now = now_utc()
+    stale = OutreachRecord(subject="stale", body="x", sequence_step=0)
+    approved = OutreachRecord(
+        subject="approved", body="y", sequence_step=0, approved_at=now
+    )
+    sent = OutreachRecord(
+        subject="sent",
+        body="z",
+        sequence_step=0,
+        approved_at=now,
+        sent_at=now,
+    )
+    lead = _minimal_lead(outreach_history=[stale, approved, sent])
+
+    removed = lead.supersede_unapproved_drafts_at_step(0)
+
+    assert removed == 1
+    assert [r.subject for r in lead.outreach_history] == ["approved", "sent"]
+
+
     """When `contact.full_name` is set, it wins over first/last reconstruction."""
     lead = _minimal_lead(
         contact=ContactInfo(first_name="Jane", last_name="Doe", full_name="Jane D. Doe")

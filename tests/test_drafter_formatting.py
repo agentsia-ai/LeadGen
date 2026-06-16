@@ -57,6 +57,34 @@ def test_deterministic_greeting_prepended(test_config, test_keys, sample_lead) -
     assert body.startswith("Hi Jane,\n\nSaw Acme is hiring SDRs.")
 
 
+def test_greeting_title_cases_lowercased_first_name(test_config, test_keys, sample_lead) -> None:
+    """Lead records store normalized lowercase names — greeting must title-case."""
+    sample_lead.contact.first_name = "anthony"
+    sample_lead.contact.last_name = "baumer"
+    sample_lead.contact.full_name = "anthony baumer"
+    test_config.outreach.greeting_format = "Hi {first_name},"
+    test_config.outreach.signature = ""
+    d = OutreachDrafter(test_config, test_keys)
+    body = d._format_body("Property managers often lose hours to admin.", sample_lead)
+    assert body.startswith("Hi Anthony,")
+
+
+def test_title_case_name_handles_hyphen_and_apostrophe(test_config, test_keys) -> None:
+    d = OutreachDrafter(test_config, test_keys)
+    assert d._title_case_name("jean-pierre") == "Jean-Pierre"
+    assert d._title_case_name("o'connor") == "O'Connor"
+    assert d._title_case_name("mary jane") == "Mary Jane"
+
+
+def test_body_restores_title_cased_prospect_name(test_config, test_keys, sample_lead) -> None:
+    sample_lead.contact.first_name = "anthony"
+    test_config.outreach.greeting_format = ""
+    test_config.outreach.signature = ""
+    d = OutreachDrafter(test_config, test_keys)
+    body = d._format_body("Quick note for anthony about admin time.", sample_lead)
+    assert "for Anthony about" in body
+
+
 def test_model_greeting_stripped_before_deterministic_greeting(
     test_config, test_keys, sample_lead
 ) -> None:

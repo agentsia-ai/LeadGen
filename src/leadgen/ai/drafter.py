@@ -180,6 +180,30 @@ Title: {lead.contact.title or 'Unknown'}
 Keep it very short. Add a new angle or value point. Don't be pushy."""
 
     @staticmethod
+    def _title_case_name(name: str) -> str:
+        """Title-case a person name from normalized (often lowercased) lead data."""
+        name = (name or "").strip()
+        if not name:
+            return name
+
+        def capitalize_part(part: str) -> str:
+            if not part:
+                return part
+            if "'" in part:
+                return "'".join(
+                    capitalize_part(p) if p else p for p in part.split("'")
+                )
+            return part[0].upper() + part[1:].lower()
+
+        pieces: list[str] = []
+        for segment in re.split(r"(\s+|-)", name):
+            if not segment or segment.isspace() or segment == "-":
+                pieces.append(segment)
+            else:
+                pieces.append(capitalize_part(segment))
+        return "".join(pieces)
+
+    @staticmethod
     def _parse_json_response(raw: str) -> dict:
         raw = raw.strip()
         if raw.startswith("```"):
@@ -248,7 +272,7 @@ Keep it very short. Add a new angle or value point. Don't be pushy."""
                 return
             key = token.lower()
             if key not in forms:
-                forms[key] = token
+                forms[key] = self._title_case_name(token)
 
         for name in (
             lead.contact.first_name,
@@ -349,7 +373,7 @@ Keep it very short. Add a new angle or value point. Don't be pushy."""
             first = lead.display_name.split()[0]
         if not first:
             return ""
-        return fmt.format(first_name=first)
+        return fmt.format(first_name=self._title_case_name(first))
 
     def _strip_model_greeting(self, body: str, lead: Lead) -> str:
         """Remove model-generated opening greetings so the engine owns the salutation."""
@@ -433,6 +457,7 @@ Keep it very short. Add a new angle or value point. Don't be pushy."""
         """
         body = self._strip_model_signoff(body.strip())
         body = self._strip_model_greeting(body, lead)
+        body = self._apply_token_forms(body, self._person_name_forms(lead))
         greeting = self._build_greeting(lead)
         sig = self.config.outreach.signature.format(
             operator_name=self.config.operator_name,

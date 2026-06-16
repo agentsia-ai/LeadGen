@@ -145,3 +145,23 @@ class Lead(BaseModel):
 
     def touch(self) -> None:
         self.updated_at = now_utc()
+
+    def supersede_unapproved_drafts_at_step(self, sequence_step: int) -> int:
+        """Remove unapproved, unsent drafts at a sequence step before re-drafting.
+
+        Approved and sent records are never touched. Returns how many drafts
+        were removed.
+        """
+        kept: list[OutreachRecord] = []
+        removed = 0
+        for record in self.outreach_history:
+            if (
+                record.sequence_step == sequence_step
+                and record.approved_at is None
+                and record.sent_at is None
+            ):
+                removed += 1
+                continue
+            kept.append(record)
+        self.outreach_history = kept
+        return removed
