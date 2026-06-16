@@ -49,6 +49,58 @@ def test_normalize_subject_sentence_case_preserves_multi_word_company(
     )
 
 
+def test_normalize_subject_title_cases_lowercased_company_name(
+    test_config, test_keys, sample_lead
+) -> None:
+    """Lead records store normalized lowercase company names — subject must title-case."""
+    test_config.outreach.subject_casing = "sentence"
+    sample_lead.company.name = "matrix realty group"
+    d = OutreachDrafter(test_config, test_keys)
+    assert d._normalize_subject("matrix realty group admin hours back", sample_lead) == (
+        "Matrix Realty Group admin hours back"
+    )
+
+
+def test_body_title_cases_lowercased_company_name(test_config, test_keys, sample_lead) -> None:
+    """Company name in body CTA must use the same display casing as subject/greeting."""
+    sample_lead.company.name = "matrix realty group"
+    test_config.outreach.greeting_format = ""
+    test_config.outreach.signature = ""
+    d = OutreachDrafter(test_config, test_keys)
+    body = d._format_body(
+        "Would a quick call be a fit for matrix realty group?",
+        sample_lead,
+    )
+    assert "fit for Matrix Realty Group?" in body
+
+
+def test_display_company_name_preserves_stored_mixed_case(test_config, test_keys, sample_lead) -> None:
+    sample_lead.company.name = "Matrix Realty Group"
+    d = OutreachDrafter(test_config, test_keys)
+    assert d._display_company_name(sample_lead) == "Matrix Realty Group"
+
+
+def test_strip_em_dashes_from_body(test_config, test_keys, sample_lead) -> None:
+    test_config.outreach.greeting_format = ""
+    test_config.outreach.signature = ""
+    d = OutreachDrafter(test_config, test_keys)
+    body = d._format_body(
+        "Admin piles up fast — property managers feel it every week.",
+        sample_lead,
+    )
+    assert "—" not in body
+    assert "–" not in body
+    assert "Admin piles up fast, property managers feel it every week." in body
+
+
+def test_strip_en_dashes_from_body(test_config, test_keys, sample_lead) -> None:
+    test_config.outreach.greeting_format = ""
+    test_config.outreach.signature = ""
+    d = OutreachDrafter(test_config, test_keys)
+    body = d._format_body("Week 1–3 is the hardest stretch.", sample_lead)
+    assert "Week 1-3 is the hardest stretch." in body
+
+
 def test_deterministic_greeting_prepended(test_config, test_keys, sample_lead) -> None:
     test_config.outreach.greeting_format = "Hi {first_name},"
     test_config.outreach.signature = "{operator_email}"
