@@ -38,7 +38,7 @@ async def test_draft_initial_parses_json_and_applies_signature(
 
     record = await d.draft_initial(sample_lead)
     assert record.subject == "Quick question, Jane"
-    assert "hiring SDRs" in record.body
+    assert "hiring SDRs, curious" in record.body
     # Signature format in the test_config fixture:
     #   "— {operator_name}, {operator_title}"
     assert "Tester, Founder" in record.body

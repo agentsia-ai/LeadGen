@@ -35,6 +35,7 @@ Write emails that:
 - Are SHORT (under 120 words for initial, under 80 for follow-ups)
 - Have one clear, low-friction call to action
 - Sound human — avoid corporate jargon and AI-speak
+- Never use em-dashes (—) or en-dashes (–); use commas, periods, or hyphens (-)
 - Never start with "I hope this email finds you well" or similar clichés
 
 HARD CONSTRAINT — NO FABRICATED SPECIFICS:
@@ -180,10 +181,17 @@ Title: {lead.contact.title or 'Unknown'}
 Keep it very short. Add a new angle or value point. Don't be pushy."""
 
     @staticmethod
-    def _title_case_name(name: str) -> str:
-        """Title-case a person name from normalized (often lowercased) lead data."""
+    def _title_case_name(name: str, *, preserve_stored_casing: bool = False) -> str:
+        """Title-case a name from normalized (often lowercased) lead data.
+
+        When ``preserve_stored_casing`` is True (company names), keep the stored
+        string if it already has meaningful caps; otherwise title-case it.
+        Person names always pass ``preserve_stored_casing=False``.
+        """
         name = (name or "").strip()
         if not name:
+            return name
+        if preserve_stored_casing and name != name.lower():
             return name
 
         def capitalize_part(part: str) -> str:
@@ -202,6 +210,19 @@ Keep it very short. Add a new angle or value point. Don't be pushy."""
             else:
                 pieces.append(capitalize_part(segment))
         return "".join(pieces)
+
+    def _display_company_name(self, lead: Lead) -> str:
+        """Company name for interpolation — stored casing or title-case when all lower."""
+        return self._title_case_name(
+            lead.company.name or "", preserve_stored_casing=True
+        )
+
+    @staticmethod
+    def _strip_em_dashes(text: str) -> str:
+        """Replace em/en dashes with comma or hyphen — deterministic LLM slip guard."""
+        text = re.sub(r"\s*—\s*", ", ", text)
+        text = re.sub(r"\s*–\s*", "-", text)
+        return text
 
     @staticmethod
     def _parse_json_response(raw: str) -> dict:
@@ -287,8 +308,8 @@ Keep it very short. Add a new angle or value point. Don't be pushy."""
         return forms
 
     def _restore_company_name_phrase(self, text: str, lead: Lead) -> str:
-        """Restore multi-word company names using stored casing from the lead record."""
-        name = (lead.company.name or "").strip()
+        """Restore multi-word company names using display casing from the lead record."""
+        name = self._display_company_name(lead)
         if not name:
             return text
         words = re.findall(r"[\w']+", name)
@@ -302,10 +323,11 @@ Keep it very short. Add a new angle or value point. Don't be pushy."""
         return re.sub(pattern, lambda _m: name, text, flags=re.IGNORECASE)
 
     def _company_name_forms(self, lead: Lead) -> dict[str, str]:
-        """Company name tokens — title case from the lead when not written as an acronym."""
+        """Company name tokens — display casing from the lead record."""
         forms: dict[str, str] = {}
-        if lead.company.name:
-            for word in re.findall(r"[\w']+", lead.company.name):
+        display = self._display_company_name(lead)
+        if display:
+            for word in re.findall(r"[\w']+", display):
                 word = word.strip()
                 if len(word) >= 2:
                     key = word.lower()
@@ -457,7 +479,9 @@ Keep it very short. Add a new angle or value point. Don't be pushy."""
         """
         body = self._strip_model_signoff(body.strip())
         body = self._strip_model_greeting(body, lead)
+        body = self._strip_em_dashes(body)
         body = self._apply_token_forms(body, self._person_name_forms(lead))
+        body = self._apply_token_forms(body, self._company_name_forms(lead))
         greeting = self._build_greeting(lead)
         sig = self.config.outreach.signature.format(
             operator_name=self.config.operator_name,
