@@ -101,3 +101,53 @@ async def test_send_test_draft_delivers_without_mutating_lead(
     assert stored.contact.email == scored_lead.contact.email
     assert stored.status == LeadStatus.QUEUED
     assert stored.outreach_history[0].sent_at is None
+
+
+@pytest.mark.asyncio
+async def test_draft_outreach_supersedes_prior_unapproved_at_same_step(
+    mcp_env, scored_lead, monkeypatch
+) -> None:
+    """Re-drafting must leave one pending draft per sequence_step."""
+    stale_1 = OutreachRecord(subject="old #1", body="stale one", sequence_step=0)
+    stale_2 = OutreachRecord(subject="old #2", body="stale two", sequence_step=0)
+    approved = OutreachRecord(
+        subject="approved",
+        body="keep",
+        sequence_step=0,
+        approved_at=now_utc(),
+    )
+    sent = OutreachRecord(
+        subject="sent",
+        body="sent body",
+        sequence_step=0,
+        approved_at=now_utc(),
+        sent_at=now_utc(),
+    )
+    scored_lead.outreach_history = [stale_1, stale_2, approved, sent]
+    await mcp_env.upsert(scored_lead)
+
+    new_record = OutreachRecord(subject="fresh", body="latest draft", sequence_step=0)
+
+    class FakeDrafter:
+        def __init__(self, config, keys):
+            pass
+
+        async def draft_initial(self, lead):
+            return new_record
+
+    monkeypatch.setattr(mcp_server, "DRAFTER_CLASS", FakeDrafter)
+
+    result = await mcp_server.call_tool(
+        "draft_outreach", {"lead_id": scored_lead.id}
+    )
+    payload = json.loads(result[0].text)
+
+    assert payload[0]["subject"] == "fresh"
+    stored = await mcp_env.get(scored_lead.id)
+    pending = [
+        r for r in stored.outreach_history
+        if r.approved_at is None and r.sent_at is None
+    ]
+    assert len(pending) == 1
+    assert pending[0].subject == "fresh"
+    assert len(stored.outreach_history) == 3  # fresh + approved + sent
