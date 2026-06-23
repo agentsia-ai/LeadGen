@@ -200,6 +200,25 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="draft_followup",
+            description=(
+                "Draft the next follow-up email for a lead that already has sent outreach. "
+                "Uses the lead's sent-history step count (1=first follow-up, 2=second, "
+                "3=third/final). Requires lead_id. Refuses at max_follow_ups. Does not "
+                "reset contacted status or overwrite sent records."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "lead_id": {
+                        "type": "string",
+                        "description": "Lead ID to draft the next follow-up for (required)",
+                    },
+                },
+                "required": ["lead_id"],
+            },
+        ),
+        Tool(
             name="approve_outreach",
             description="Approve drafted outreach messages and queue them for sending.",
             inputSchema={
@@ -630,6 +649,59 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
         return _json(drafted)
 
+    elif name == "draft_followup":
+        lead_id = arguments.get("lead_id")
+        if not lead_id:
+            return _json({"error": "lead_id is required — one explicit target per call"})
+
+        lead = await db.get(lead_id)
+        if not lead:
+            return _json({"error": "Lead not found", "lead_id": lead_id})
+
+        if lead.next_follow_up_step < 1:
+            return _json({
+                "error": (
+                    "No sent outreach on this lead — use draft_outreach for the initial "
+                    "message first"
+                ),
+                "lead_id": lead_id,
+            })
+
+        if lead.next_follow_up_step >= config.outreach.max_follow_ups:
+            return _json({
+                "error": (
+                    f"Lead has reached max follow-ups ({config.outreach.max_follow_ups})"
+                ),
+                "lead_id": lead_id,
+                "next_follow_up_step": lead.next_follow_up_step,
+            })
+
+        drafter = DRAFTER_CLASS(config, keys)
+        try:
+            record = await drafter.draft_followup(lead)
+        except ValueError as exc:
+            return _json({"error": str(exc), "lead_id": lead_id})
+
+        prior_status = lead.status
+        lead.supersede_unapproved_drafts_at_step(record.sequence_step)
+        lead.outreach_history.append(record)
+        lead.status = prior_status
+        lead.touch()
+        await db.upsert(lead)
+
+        return _json([{
+            "lead_id": lead.id,
+            "name": lead.display_name,
+            "company": lead.company.name,
+            "outreach_id": record.id,
+            "sequence_step": record.sequence_step,
+            "follow_up_number": record.sequence_step,
+            "status": lead.status.value,
+            "subject": record.subject,
+            "body": record.body,
+            "body_preview": record.body[:200] + ("..." if len(record.body) > 200 else ""),
+        }])
+
     elif name == "approve_outreach":
         lead = await db.get(arguments["lead_id"])
         if not lead:
@@ -683,14 +755,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     })
                 has_sent = any(r.sent_at for r in lead.outreach_history)
                 if has_sent:
-                    sent_record = next(
-                        r for r in lead.outreach_history if r.sent_at
-                    )
                     return _json({
-                        "error": "Outreach already sent — refusing duplicate send",
+                        "error": (
+                            "No pending approved outreach — call draft_followup to "
+                            "draft the next message in the sequence"
+                        ),
                         "lead_id": lead_id,
-                        "outreach_id": sent_record.id,
-                        "sent_at": sent_record.sent_at.isoformat(),
+                        "sent_count": len(
+                            [r for r in lead.outreach_history if r.sent_at]
+                        ),
                     })
                 return _json({
                     "error": "No approved, unsent outreach draft on this lead",
