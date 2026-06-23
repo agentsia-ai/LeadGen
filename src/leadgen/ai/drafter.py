@@ -481,7 +481,7 @@ Keep it very short. Add a new angle or value point. Don't be pushy."""
         body = self._strip_model_greeting(body, lead)
         body = self._strip_em_dashes(body)
         body = self._apply_token_forms(body, self._person_name_forms(lead))
-        body = self._apply_token_forms(body, self._company_name_forms(lead))
+        body = self._restore_company_name_phrase(body, lead)
         greeting = self._build_greeting(lead)
         sig = self.config.outreach.signature.format(
             operator_name=self.config.operator_name,
