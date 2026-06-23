@@ -144,7 +144,8 @@ async def test_send_outreach_refuses_already_sent(mcp_env, scored_lead) -> None:
     await mcp_env.upsert(scored_lead)
 
     result = await mcp_server.call_tool(
-        "send_outreach", {"lead_id": scored_lead.id}
+        "send_outreach",
+        {"lead_id": scored_lead.id, "outreach_id": record.id},
     )
     payload = json.loads(result[0].text)
 
@@ -278,3 +279,200 @@ async def test_draft_outreach_supersedes_prior_unapproved_at_same_step(
     assert len(pending) == 1
     assert pending[0].subject == "fresh"
     assert len(stored.outreach_history) == 3  # fresh + approved + sent
+
+
+@pytest.mark.asyncio
+async def test_draft_followup_requires_lead_id(mcp_env) -> None:
+    result = await mcp_server.call_tool("draft_followup", {})
+    payload = json.loads(result[0].text)
+    assert "lead_id is required" in payload["error"]
+
+
+@pytest.mark.asyncio
+async def test_draft_followup_refuses_without_sent_outreach(mcp_env, scored_lead) -> None:
+    await mcp_env.upsert(scored_lead)
+    result = await mcp_server.call_tool(
+        "draft_followup", {"lead_id": scored_lead.id}
+    )
+    payload = json.loads(result[0].text)
+    assert "No sent outreach" in payload["error"]
+
+
+@pytest.mark.asyncio
+async def test_draft_followup_refuses_at_max(mcp_env, scored_lead, test_config) -> None:
+    test_config.outreach.max_follow_ups = 2
+    now = now_utc()
+    scored_lead.outreach_history = [
+        OutreachRecord(subject="#0", body="a", sent_at=now, sequence_step=0),
+        OutreachRecord(subject="#1", body="b", sent_at=now, sequence_step=1),
+    ]
+    scored_lead.status = LeadStatus.FOLLOWING_UP
+    await mcp_env.upsert(scored_lead)
+
+    result = await mcp_server.call_tool(
+        "draft_followup", {"lead_id": scored_lead.id}
+    )
+    payload = json.loads(result[0].text)
+    assert "max follow-ups" in payload["error"]
+
+
+@pytest.mark.asyncio
+async def test_draft_followup_preserves_contacted_status(
+    mcp_env, scored_lead, monkeypatch
+) -> None:
+    """Follow-up drafting must not reset contacted leads to queued."""
+    now = now_utc()
+    sent = OutreachRecord(
+        subject="Initial",
+        body="First email body",
+        sequence_step=0,
+        approved_at=now,
+        sent_at=now,
+    )
+    scored_lead.outreach_history = [sent]
+    scored_lead.status = LeadStatus.CONTACTED
+    await mcp_env.upsert(scored_lead)
+
+    followup = OutreachRecord(
+        subject="Re: Initial",
+        body="Follow-up body with new angle.",
+        sequence_step=1,
+    )
+
+    class FakeDrafter:
+        def __init__(self, config, keys):
+            pass
+
+        async def draft_followup(self, lead):
+            assert lead.next_follow_up_step == 1
+            return followup
+
+    monkeypatch.setattr(mcp_server, "DRAFTER_CLASS", FakeDrafter)
+
+    result = await mcp_server.call_tool(
+        "draft_followup", {"lead_id": scored_lead.id}
+    )
+    payload = json.loads(result[0].text)
+
+    assert payload[0]["sequence_step"] == 1
+    assert payload[0]["follow_up_number"] == 1
+    assert payload[0]["status"] == LeadStatus.CONTACTED.value
+    assert payload[0]["body"] == followup.body
+
+    stored = await mcp_env.get(scored_lead.id)
+    assert stored.status == LeadStatus.CONTACTED
+    assert len(stored.outreach_history) == 2
+    assert stored.outreach_history[0].sent_at is not None
+    assert stored.outreach_history[1].sequence_step == 1
+    assert stored.outreach_history[1].sent_at is None
+
+
+@pytest.mark.asyncio
+async def test_draft_followup_supersedes_prior_unapproved_at_same_step(
+    mcp_env, scored_lead, monkeypatch
+) -> None:
+    now = now_utc()
+    sent = OutreachRecord(
+        subject="Initial",
+        body="sent",
+        sequence_step=0,
+        approved_at=now,
+        sent_at=now,
+    )
+    stale = OutreachRecord(subject="old follow-up", body="stale", sequence_step=1)
+    scored_lead.outreach_history = [sent, stale]
+    scored_lead.status = LeadStatus.CONTACTED
+    await mcp_env.upsert(scored_lead)
+
+    fresh = OutreachRecord(subject="fresh follow-up", body="latest", sequence_step=1)
+
+    class FakeDrafter:
+        def __init__(self, config, keys):
+            pass
+
+        async def draft_followup(self, lead):
+            return fresh
+
+    monkeypatch.setattr(mcp_server, "DRAFTER_CLASS", FakeDrafter)
+
+    await mcp_server.call_tool("draft_followup", {"lead_id": scored_lead.id})
+    stored = await mcp_env.get(scored_lead.id)
+    pending = [
+        r for r in stored.outreach_history
+        if r.approved_at is None and r.sent_at is None
+    ]
+    assert len(pending) == 1
+    assert pending[0].subject == "fresh follow-up"
+    assert len(stored.outreach_history) == 2
+
+
+@pytest.mark.asyncio
+async def test_send_outreach_sends_approved_followup_and_advances_step(
+    mcp_env, scored_lead, monkeypatch
+) -> None:
+    now = now_utc()
+    initial = OutreachRecord(
+        subject="Initial",
+        body="First email",
+        sequence_step=0,
+        approved_at=now,
+        sent_at=now,
+    )
+    followup = OutreachRecord(
+        subject="Re: Initial",
+        body="Follow-up body",
+        sequence_step=1,
+        approved_at=now,
+    )
+    scored_lead.outreach_history = [initial, followup]
+    scored_lead.status = LeadStatus.CONTACTED
+    await mcp_env.upsert(scored_lead)
+
+    async def fake_send(self, to_email, to_name, subject, body):
+        assert subject == "Re: Initial"
+        assert body == "Follow-up body"
+        return True
+
+    monkeypatch.setattr(
+        "leadgen.outreach.email.EmailSender._send",
+        fake_send,
+    )
+
+    result = await mcp_server.call_tool(
+        "send_outreach",
+        {"lead_id": scored_lead.id, "outreach_id": followup.id},
+    )
+    payload = json.loads(result[0].text)
+
+    assert payload["sent"] is True
+    assert payload["status"] == LeadStatus.FOLLOWING_UP.value
+
+    stored = await mcp_env.get(scored_lead.id)
+    assert stored.status == LeadStatus.FOLLOWING_UP
+    assert stored.next_follow_up_step == 2
+    assert stored.outreach_history[1].sent_at is not None
+
+
+@pytest.mark.asyncio
+async def test_send_outreach_prompts_draft_followup_when_all_sent(
+    mcp_env, scored_lead
+) -> None:
+    now = now_utc()
+    initial = OutreachRecord(
+        subject="Initial",
+        body="First email",
+        sequence_step=0,
+        approved_at=now,
+        sent_at=now,
+    )
+    scored_lead.outreach_history = [initial]
+    scored_lead.status = LeadStatus.CONTACTED
+    await mcp_env.upsert(scored_lead)
+
+    result = await mcp_server.call_tool(
+        "send_outreach", {"lead_id": scored_lead.id}
+    )
+    payload = json.loads(result[0].text)
+
+    assert "draft_followup" in payload["error"]
+    assert payload["sent_count"] == 1
