@@ -62,7 +62,7 @@ def test_normalize_subject_title_cases_lowercased_company_name(
 
 
 def test_body_title_cases_lowercased_company_name(test_config, test_keys, sample_lead) -> None:
-    """Company name in body CTA must use the same display casing as subject/greeting."""
+    """Full company phrase in body must use display casing from the lead record."""
     sample_lead.company.name = "matrix realty group"
     test_config.outreach.greeting_format = ""
     test_config.outreach.signature = ""
@@ -72,6 +72,37 @@ def test_body_title_cases_lowercased_company_name(test_config, test_keys, sample
         sample_lead,
     )
     assert "fit for Matrix Realty Group?" in body
+
+
+def test_body_does_not_capitalize_generic_company_tokens(
+    test_config, test_keys, sample_lead
+) -> None:
+    """Standalone tokens from a company name must not be altered in generic prose."""
+    sample_lead.company.name = "gtps insurance agency"
+    test_config.outreach.greeting_format = ""
+    test_config.outreach.signature = ""
+    d = OutreachDrafter(test_config, test_keys)
+    body = d._format_body(
+        "Running an insurance agency means juggling renewals, claims, and client follow-ups.",
+        sample_lead,
+    )
+    assert "insurance agency" in body
+    assert "Insurance Agency" not in body
+
+
+def test_body_restores_full_company_phrase_with_stored_casing(
+    test_config, test_keys, sample_lead
+) -> None:
+    """Literal full company phrase in body is restored using lead-record casing."""
+    sample_lead.company.name = "GTPS Insurance Agency"
+    test_config.outreach.greeting_format = ""
+    test_config.outreach.signature = ""
+    d = OutreachDrafter(test_config, test_keys)
+    body = d._format_body(
+        "Would a quick call be worth it for gtps insurance agency?",
+        sample_lead,
+    )
+    assert "for GTPS Insurance Agency?" in body
 
 
 def test_display_company_name_preserves_stored_mixed_case(test_config, test_keys, sample_lead) -> None:
