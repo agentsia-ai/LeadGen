@@ -15,6 +15,7 @@ from leadgen.models import (
     LeadSource,
     LeadStatus,
     OutreachRecord,
+    split_company_names,
 )
 
 
@@ -100,6 +101,26 @@ def test_touch_bumps_updated_at() -> None:
     lead.updated_at = before - timedelta(seconds=5)
     lead.touch()
     assert lead.updated_at > before - timedelta(seconds=5)
+
+
+def test_split_company_names_lowercases_match_key() -> None:
+    match_key, display = split_company_names("Acme Corp")
+    assert match_key == "acme corp"
+    assert display == "Acme Corp"
+
+
+def test_split_company_names_all_lower_has_no_display() -> None:
+    match_key, display = split_company_names("corfac international")
+    assert match_key == "corfac international"
+    assert display is None
+
+
+def test_split_company_names_explicit_display() -> None:
+    match_key, display = split_company_names(
+        "corfac international", display="CORFAC International"
+    )
+    assert match_key == "corfac international"
+    assert display == "CORFAC International"
 
 
 def test_lead_default_status_is_new() -> None:

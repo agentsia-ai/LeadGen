@@ -51,8 +51,32 @@ class ContactInfo(BaseModel):
     phone: Optional[str] = None
 
 
+def split_company_names(
+    raw: str | None,
+    *,
+    display: str | None = None,
+) -> tuple[str, str | None]:
+    """Return ``(match_key, display_name)`` from a source company string.
+
+    ``match_key`` is always lowercased for dedup/identity matching.
+    ``display_name`` is set when the source carries meaningful casing or an
+    explicit display string is provided (e.g. PDL Company Enrichment).
+    """
+    raw = (raw or "Unknown").strip()
+    match_key = raw.lower()
+    disp = (display or raw).strip()
+    if display:
+        return match_key, disp
+    if disp != match_key:
+        return match_key, disp
+    return match_key, None
+
+
 class CompanyInfo(BaseModel):
+    # Lowercase match key for dedup — see split_company_names().
     name: str
+    # Source-cased company name for display (CORFAC International, LuckyTruck).
+    display_name: Optional[str] = None
     domain: Optional[str] = None
     website: Optional[str] = None
     industry: Optional[str] = None

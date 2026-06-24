@@ -137,7 +137,8 @@ async def test_hunter_domain_search_parses_emails_entries_into_leads(
     bob = next(l for l in leads if l.contact.email == "bob@acme.com")
     assert jane.contact.email_verified is True
     assert bob.contact.email_verified is False
-    assert jane.company.name == "Acme Corp"
+    assert jane.company.name == "acme corp"
+    assert jane.company.display_name == "Acme Corp"
     assert jane.company.domain == "acme.com"
 
 
@@ -240,7 +241,8 @@ async def test_apollo_search_builds_query_from_icp_and_parses_people(
     assert lead.source == LeadSource.APOLLO
     assert lead.contact.email == "jane@acme.com"
     assert lead.contact.email_verified is True
-    assert lead.company.name == "Acme Corp"
+    assert lead.company.name == "acme corp"
+    assert lead.company.display_name == "Acme Corp"
     assert lead.company.technologies == ["python", "postgres"]
 
     # Query params from ICP made it into the URL
@@ -308,7 +310,8 @@ async def test_pdl_search_builds_es_query_and_parses_records(
                         "job_title": "VP Eng",
                         "work_email": "jane@acme.com",
                         "linkedin_url": "https://linkedin.com/in/jane",
-                        "job_company_name": "Acme Corp",
+                        "job_company_name": "acme corp",
+                        "job_company_id": "pdl-acme",
                         "job_company_website": "acme.com",
                         "job_company_industry": "software",
                         "job_company_employee_count": 150,
@@ -324,6 +327,12 @@ async def test_pdl_search_builds_es_query_and_parses_records(
     respx.get("https://api.peopledatalabs.com/v5/person/search").mock(
         side_effect=_handler
     )
+    respx.get("https://api.peopledatalabs.com/v5/company/enrich").mock(
+        return_value=httpx.Response(
+            200,
+            json={"display_name": "Acme Corp", "name": "acme corp"},
+        )
+    )
 
     async with PDLConnector(test_config, test_keys) as p:
         leads = await p.search(limit=1)
@@ -332,7 +341,8 @@ async def test_pdl_search_builds_es_query_and_parses_records(
     lead = leads[0]
     assert lead.source == LeadSource.PDL
     assert lead.contact.email == "jane@acme.com"
-    assert lead.company.name == "Acme Corp"
+    assert lead.company.name == "acme corp"
+    assert lead.company.display_name == "Acme Corp"
     # Country is un-underscored in the parsed Lead
     assert lead.company.country == "united states"
 
@@ -489,11 +499,71 @@ def test_pdl_parses_employee_count_range_string(test_config, test_keys) -> None:
             "first_name": "X",
             "last_name": "Y",
             "full_name": "X Y",
-            "job_company_name": "RangeCo",
+            "job_company_name": "rangeco",
             "job_company_employee_count": "11-50",
         }
     )
     assert lead.company.employee_count == 30
+    assert lead.company.name == "rangeco"
+    assert lead.company.display_name is None
+
+
+def test_pdl_fetches_company_display_name_from_enrich(test_config, test_keys) -> None:
+    """PDL Person Search lowercases job_company_name; display_name comes from
+    Company Enrichment keyed by job_company_id."""
+    p = PDLConnector(test_config, test_keys)
+    lead = p._parse_person(
+        {
+            "first_name": "X",
+            "last_name": "Y",
+            "full_name": "X Y",
+            "job_company_name": "corfac international",
+            "job_company_id": "pdl-company-123",
+        }
+    )
+    assert lead.company.name == "corfac international"
+    assert lead.company.display_name is None
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_pdl_search_attaches_company_display_name(test_config, test_keys) -> None:
+    respx.get("https://api.peopledatalabs.com/v5/person/search").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "first_name": "Jane",
+                        "last_name": "Doe",
+                        "full_name": "Jane Doe",
+                        "job_title": "VP Eng",
+                        "work_email": "jane@luckytruck.com",
+                        "job_company_name": "luckytruck",
+                        "job_company_id": "pdl-luckytruck",
+                        "job_company_website": "luckytruck.com",
+                        "job_company_industry": "insurance",
+                        "job_company_employee_count": 50,
+                        "job_company_location_country": "united_states",
+                    }
+                ],
+                "scroll_token": None,
+            },
+        )
+    )
+    respx.get("https://api.peopledatalabs.com/v5/company/enrich").mock(
+        return_value=httpx.Response(
+            200,
+            json={"display_name": "LuckyTruck", "name": "luckytruck"},
+        )
+    )
+
+    async with PDLConnector(test_config, test_keys) as p:
+        leads = await p.search(limit=1)
+
+    assert len(leads) == 1
+    assert leads[0].company.name == "luckytruck"
+    assert leads[0].company.display_name == "LuckyTruck"
 
 
 def test_pdl_normalizes_boolean_email_to_none(test_config, test_keys) -> None:

@@ -12,7 +12,7 @@ import logging
 from pathlib import Path
 
 from leadgen.config.loader import APIKeys, LeadGenConfig
-from leadgen.models import CompanyInfo, ContactInfo, Lead, LeadSource
+from leadgen.models import CompanyInfo, ContactInfo, Lead, LeadSource, split_company_names
 
 logger = logging.getLogger(__name__)
 
@@ -87,8 +87,10 @@ def _parse_row(row: dict, headers: list[str]) -> Lead | None:
     if not domain and website:
         domain = website.replace("https://", "").replace("http://", "").split("/")[0]
 
+    match_key, display_name = split_company_names(company or "Unknown")
     company_info = CompanyInfo(
-        name=company or "Unknown",
+        name=match_key,
+        display_name=display_name,
         domain=domain,
         website=website,
         city=get("city"),

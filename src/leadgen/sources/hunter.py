@@ -16,7 +16,7 @@ import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from leadgen.config.loader import APIKeys, LeadGenConfig
-from leadgen.models import ContactInfo, CompanyInfo, Lead, LeadSource
+from leadgen.models import ContactInfo, CompanyInfo, Lead, LeadSource, split_company_names
 
 logger = logging.getLogger(__name__)
 
@@ -338,8 +338,10 @@ class HunterConnector:
             linkedin_url=entry.get("linkedin"),
         )
 
+        match_key, display_name = split_company_names(org_name)
         company = CompanyInfo(
-            name=org_name,
+            name=match_key,
+            display_name=display_name,
             domain=domain,
             website=f"https://{domain}",
         )
