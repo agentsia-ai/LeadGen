@@ -125,7 +125,7 @@ class OutreachDrafter:
         tone = tone_map.get(self.config.outreach.tone, "friendly-professional")
 
         return f"""Write a cold outreach email from {op.operator_name} ({op.operator_title}) 
-to {lead.display_name} at {lead.company.name}.
+to {lead.display_name} at {self._display_company_name(lead)}.
 
 === SENDER INFO ===
 Name: {op.operator_name}
@@ -137,7 +137,7 @@ Key Proof Points: {'; '.join(vp.proof_points)}
 === PROSPECT INFO ===
 Name: {lead.display_name}
 Title: {lead.contact.title or 'Unknown'}
-Company: {lead.company.name}
+Company: {self._display_company_name(lead)}
 Industry: {lead.company.industry or 'Unknown'}
 Size: {lead.company.employee_count or 'Unknown'} employees
 Location: {lead.company.city}, {lead.company.state}
@@ -168,13 +168,13 @@ Write the initial cold outreach email now."""
         follow_up_labels = {1: "first", 2: "second", 3: "third (final)"}
         label = follow_up_labels.get(step, f"follow-up #{step}")
 
-        return f"""Write the {label} follow-up email to {lead.display_name} at {lead.company.name}.
+        return f"""Write the {label} follow-up email to {lead.display_name} at {self._display_company_name(lead)}.
 
 === PREVIOUS OUTREACH ===
 {previous_context}
 
 === PROSPECT CONTEXT ===
-Company: {lead.company.name}
+Company: {self._display_company_name(lead)}
 Industry: {lead.company.industry or 'Unknown'}
 Title: {lead.contact.title or 'Unknown'}
 
@@ -212,7 +212,9 @@ Keep it very short. Add a new angle or value point. Don't be pushy."""
         return "".join(pieces)
 
     def _display_company_name(self, lead: Lead) -> str:
-        """Company name for interpolation — stored casing or title-case when all lower."""
+        """Company name for interpolation — display_name when stored, else title-case fallback."""
+        if (lead.company.display_name or "").strip():
+            return lead.company.display_name.strip()
         return self._title_case_name(
             lead.company.name or "", preserve_stored_casing=True
         )

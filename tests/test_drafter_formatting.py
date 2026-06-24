@@ -94,8 +94,9 @@ def test_body_does_not_capitalize_generic_company_tokens(
 def test_body_restores_full_company_phrase_with_stored_casing(
     test_config, test_keys, sample_lead
 ) -> None:
-    """Literal full company phrase in body is restored using lead-record casing."""
-    sample_lead.company.name = "GTPS Insurance Agency"
+    """Literal full company phrase in body is restored using display_name."""
+    sample_lead.company.name = "gtps insurance agency"
+    sample_lead.company.display_name = "GTPS Insurance Agency"
     test_config.outreach.greeting_format = ""
     test_config.outreach.signature = ""
     d = OutreachDrafter(test_config, test_keys)
@@ -104,6 +105,33 @@ def test_body_restores_full_company_phrase_with_stored_casing(
         sample_lead,
     )
     assert "for GTPS Insurance Agency?" in body
+
+
+def test_display_company_name_uses_display_name_when_set(test_config, test_keys, sample_lead) -> None:
+    sample_lead.company.name = "corfac international"
+    sample_lead.company.display_name = "CORFAC International"
+    d = OutreachDrafter(test_config, test_keys)
+    assert d._display_company_name(sample_lead) == "CORFAC International"
+
+
+def test_subject_renders_corfac_with_source_casing(test_config, test_keys, sample_lead) -> None:
+    test_config.outreach.subject_casing = "sentence"
+    sample_lead.company.name = "corfac international"
+    sample_lead.company.display_name = "CORFAC International"
+    d = OutreachDrafter(test_config, test_keys)
+    assert d._normalize_subject(
+        "corfac international admin hours back", sample_lead
+    ) == "CORFAC International admin hours back"
+
+
+def test_subject_renders_luckytruck_with_source_casing(test_config, test_keys, sample_lead) -> None:
+    test_config.outreach.subject_casing = "sentence"
+    sample_lead.company.name = "luckytruck"
+    sample_lead.company.display_name = "LuckyTruck"
+    d = OutreachDrafter(test_config, test_keys)
+    assert d._normalize_subject("luckytruck admin time back", sample_lead) == (
+        "LuckyTruck admin time back"
+    )
 
 
 def test_display_company_name_preserves_stored_mixed_case(test_config, test_keys, sample_lead) -> None:

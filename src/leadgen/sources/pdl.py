@@ -14,7 +14,7 @@ import httpx
 from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_exponential
 
 from leadgen.config.loader import APIKeys, LeadGenConfig
-from leadgen.models import CompanyInfo, ContactInfo, Lead, LeadSource
+from leadgen.models import CompanyInfo, ContactInfo, Lead, LeadSource, split_company_names
 from leadgen.sources.pdl_industries import BROADER_THAN_LABEL, validate_and_resolve
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,8 @@ class PDLConnector:
         # fires, so every Lead parsed afterwards is flagged industry_relaxed.
         self._industry_relaxed = False
         self._industry_terms: list[str] | None = None
+        # job_company_id -> display_name (or "" when enrich returned nothing)
+        self._company_display_cache: dict[str, str] = {}
         self.client = httpx.AsyncClient(
             base_url=PDL_BASE_URL,
             headers={
@@ -282,6 +284,7 @@ class PDLConnector:
 
             for person in records:
                 lead = self._parse_person(person)
+                await self._attach_company_display_name(lead, person)
                 leads.append(lead)
                 if len(leads) >= limit:
                     break
@@ -379,8 +382,10 @@ class PDLConnector:
         # we want for display), but always store a clean bare host in `domain`
         # so Hunter enrichment has something canonical to search against.
         website = person.get("job_company_website") or (f"https://{domain}" if domain else None)
+        match_key, display_name = split_company_names(person.get("job_company_name", "Unknown"))
         comp_info = CompanyInfo(
-            name=person.get("job_company_name", "Unknown"),
+            name=match_key,
+            display_name=display_name,
             domain=domain,
             website=website,
             industry=person.get("job_company_industry"),
@@ -400,3 +405,40 @@ class PDLConnector:
             # industry filter — marks this lead as NOT verified on-vertical.
             industry_relaxed=self._industry_relaxed,
         )
+
+    async def _fetch_company_display_name(self, company_id: str) -> str | None:
+        """PDL Person Search lowercases job_company_name; proper casing lives on
+        the Company record's display_name field (one enrich credit per company)."""
+        if company_id in self._company_display_cache:
+            cached = self._company_display_cache[company_id]
+            return cached or None
+        if not self.api_key:
+            return None
+        try:
+            response = await self.client.get(
+                "/company/enrich",
+                params={"pdl_id": company_id},
+            )
+            if response.status_code == 404:
+                self._company_display_cache[company_id] = ""
+                return None
+            response.raise_for_status()
+            display = (response.json().get("display_name") or "").strip()
+            self._company_display_cache[company_id] = display
+            return display or None
+        except httpx.HTTPStatusError as e:
+            logger.debug(
+                "PDL company enrich failed for %s: %s",
+                company_id,
+                e.response.status_code,
+            )
+            self._company_display_cache[company_id] = ""
+            return None
+
+    async def _attach_company_display_name(self, lead: Lead, person: dict) -> None:
+        company_id = person.get("job_company_id")
+        if not company_id or lead.company.display_name:
+            return
+        display = await self._fetch_company_display_name(company_id)
+        if display:
+            lead.company.display_name = display

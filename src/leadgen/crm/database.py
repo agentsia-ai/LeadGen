@@ -182,6 +182,8 @@ class LeadDatabase:
                     target.contact.email_verified = lead.contact.email_verified
                 if lead.company.domain and not target.company.domain:
                     target.company.domain = lead.company.domain
+                if lead.company.display_name and not target.company.display_name:
+                    target.company.display_name = lead.company.display_name
                 target.touch()
             else:
                 target = lead

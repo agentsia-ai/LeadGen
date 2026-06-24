@@ -13,7 +13,7 @@ import httpx
 from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_exponential
 
 from leadgen.config.loader import APIKeys, LeadGenConfig
-from leadgen.models import CompanyInfo, ContactInfo, Lead, LeadSource
+from leadgen.models import CompanyInfo, ContactInfo, Lead, LeadSource, split_company_names
 
 logger = logging.getLogger(__name__)
 
@@ -192,8 +192,10 @@ class ApolloConnector:
             phone=person.get("sanitized_phone"),
         )
 
+        match_key, display_name = split_company_names(org.get("name", "Unknown"))
         company = CompanyInfo(
-            name=org.get("name", "Unknown"),
+            name=match_key,
+            display_name=display_name,
             domain=org.get("primary_domain"),
             website=org.get("website_url"),
             industry=org.get("industry"),
