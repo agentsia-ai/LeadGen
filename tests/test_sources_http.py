@@ -361,7 +361,16 @@ async def test_pdl_search_builds_es_query_and_parses_records(
         for blob in field_blobs
     ]
     assert any("job_company_location_country" in f for f in flat_fields)
-    assert any("job_company_employee_count" in f for f in flat_fields)
+    # Size filter is a bool.should (in-band OR unknown headcount), not a bare range.
+    size_clause = next(c for c in must if "bool" in c and "should" in c["bool"])
+    should = size_clause["bool"]["should"]
+    assert size_clause["bool"]["minimum_should_match"] == 1
+    assert {"range": {"job_company_employee_count": {"gte": 10, "lte": 500}}} in should
+    assert {
+        "bool": {
+            "must_not": {"exists": {"field": "job_company_employee_count"}}
+        }
+    } in should
 
 
 @pytest.mark.asyncio
@@ -504,8 +513,56 @@ def test_pdl_parses_employee_count_range_string(test_config, test_keys) -> None:
         }
     )
     assert lead.company.employee_count == 30
+    assert lead.company.employee_count_unknown is False
     assert lead.company.name == "rangeco"
     assert lead.company.display_name is None
+
+
+def test_pdl_parses_null_employee_count_as_unknown(test_config, test_keys) -> None:
+    """Missing headcount must be flagged unknown — not treated as confirmed in-band."""
+    p = PDLConnector(test_config, test_keys)
+    lead = p._parse_person(
+        {
+            "first_name": "Solo",
+            "last_name": "Founder",
+            "full_name": "Solo Founder",
+            "job_company_name": "solo llc",
+        }
+    )
+    assert lead.company.employee_count is None
+    assert lead.company.employee_count_unknown is True
+
+
+def _pdl_size_clause_matches(
+    size_clause: dict, employee_count: int | None
+) -> bool:
+    """Mirror ES bool.should semantics for the PDL company-size filter."""
+    should = size_clause["bool"]["should"]
+    lo = should[0]["range"]["job_company_employee_count"]["gte"]
+    hi = should[0]["range"]["job_company_employee_count"]["lte"]
+    if employee_count is None:
+        return True
+    return lo <= employee_count <= hi
+
+
+def test_pdl_size_filter_includes_null_excludes_out_of_band(
+    test_config, test_keys
+) -> None:
+    """Size band OR-unknown: null headcount included; out-of-band excluded."""
+    p = PDLConnector(test_config, test_keys)
+    payload = p._build_es_query()
+    size_clause = next(
+        c
+        for c in payload["query"]["bool"]["must"]
+        if "bool" in c and "should" in c["bool"]
+    )
+    assert _pdl_size_clause_matches(size_clause, None) is True
+    assert _pdl_size_clause_matches(size_clause, 50) is True
+    assert _pdl_size_clause_matches(size_clause, 10) is True
+    assert _pdl_size_clause_matches(size_clause, 500) is True
+    assert _pdl_size_clause_matches(size_clause, 9) is False
+    assert _pdl_size_clause_matches(size_clause, 501) is False
+    assert _pdl_size_clause_matches(size_clause, 5000) is False
 
 
 def test_pdl_fetches_company_display_name_from_enrich(test_config, test_keys) -> None:

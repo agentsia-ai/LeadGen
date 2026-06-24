@@ -960,7 +960,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             "email_verified": lead.contact.email_verified,
             "company": lead.company.name,
             "industry": lead.company.industry,
-            "employees": lead.company.employee_count,
+            "employees": (
+                lead.company.employee_count
+                if not lead.company.employee_count_unknown
+                else "unknown"
+            ),
             "location": f"{lead.company.city}, {lead.company.state}",
             "score": lead.score.model_dump(mode="json") if lead.score else None,
             "status": lead.status.value,

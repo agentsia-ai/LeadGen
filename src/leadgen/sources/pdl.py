@@ -110,11 +110,29 @@ class PDLConnector:
             else:
                 must.append({"terms": {"job_company_location_region": state_terms}})
 
-        # Company size — job_company_employee_count range
+        # Company size — in-band OR headcount unknown/missing. A plain range in
+        # `must` silently drops null job_company_employee_count (common for
+        # solopreneurs); wrap as should so unknown-size records stay eligible.
         size_cfg = icp.company_size
         lo = size_cfg.get("min_employees", 1)
         hi = size_cfg.get("max_employees", 10000)
-        must.append({"range": {"job_company_employee_count": {"gte": lo, "lte": hi}}})
+        must.append(
+            {
+                "bool": {
+                    "should": [
+                        {"range": {"job_company_employee_count": {"gte": lo, "lte": hi}}},
+                        {
+                            "bool": {
+                                "must_not": {
+                                    "exists": {"field": "job_company_employee_count"}
+                                }
+                            }
+                        },
+                    ],
+                    "minimum_should_match": 1,
+                }
+            }
+        )
 
         # Industry — exact match against PDL's canonical taxonomy. job_company_industry
         # is a keyword enum, so we use term/terms (exact), not full-text match, and
@@ -292,6 +310,14 @@ class PDLConnector:
             if not scroll_token:
                 break
 
+        unknown_headcount = sum(1 for lead in leads if lead.company.employee_count_unknown)
+        if unknown_headcount:
+            logger.info(
+                "PDL: %d/%d lead(s) have unknown company headcount "
+                "(included via size-band OR-unknown filter, not confirmed in-band)",
+                unknown_headcount,
+                len(leads),
+            )
         logger.info(f"PDL returned {len(leads)} leads ({len(leads)} credits used).")
         return leads
 
@@ -358,13 +384,26 @@ class PDLConnector:
             email = None  # Free tier returns True; we need None for ContactInfo
 
         # PDL uses flat job_company_* fields
-        emp_count = person.get("job_company_employee_count")
+        raw_emp_count = person.get("job_company_employee_count")
+        emp_count = raw_emp_count
         if isinstance(emp_count, str) and "-" in str(emp_count):
             parts = str(emp_count).replace("+", "").split("-")
             try:
                 emp_count = (int(parts[0]) + int(parts[1])) // 2
             except (ValueError, IndexError):
                 emp_count = None
+        elif emp_count is not None and not isinstance(emp_count, int):
+            try:
+                emp_count = int(emp_count)
+            except (TypeError, ValueError):
+                emp_count = None
+        employee_count_unknown = emp_count is None
+        if employee_count_unknown:
+            logger.debug(
+                "PDL lead %s @ %s: job_company_employee_count missing/unknown",
+                person.get("full_name") or person.get("first_name"),
+                person.get("job_company_name"),
+            )
 
         contact = ContactInfo(
             first_name=person.get("first_name"),
@@ -390,6 +429,7 @@ class PDLConnector:
             website=website,
             industry=person.get("job_company_industry"),
             employee_count=emp_count,
+            employee_count_unknown=employee_count_unknown,
             city=person.get("job_company_location_locality"),
             state=person.get("job_company_location_region"),
             country=person.get("job_company_location_country", "us").replace("_", " "),
