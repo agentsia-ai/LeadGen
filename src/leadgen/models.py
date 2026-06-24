@@ -81,6 +81,9 @@ class CompanyInfo(BaseModel):
     website: Optional[str] = None
     industry: Optional[str] = None
     employee_count: Optional[int] = None
+    # True when the source did not provide a usable headcount (PDL often nulls
+    # this for solopreneurs). Distinct from a confirmed in-band employee_count.
+    employee_count_unknown: bool = False
     annual_revenue: Optional[int] = None
     founded_year: Optional[int] = None
     description: Optional[str] = None
