@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from leadgen.ai.drafter import OutreachDrafter
 from leadgen.config.loader import OutreachConfig
+from leadgen.outreach.email import plain_text_body_to_html
 
 
 def test_normalize_subject_sentence_case_fixes_title_case(
@@ -111,6 +112,25 @@ def test_display_company_name_preserves_stored_mixed_case(test_config, test_keys
     assert d._display_company_name(sample_lead) == "Matrix Realty Group"
 
 
+def test_strip_em_dashes_from_subject(test_config, test_keys, sample_lead) -> None:
+    test_config.outreach.subject_casing = "sentence"
+    d = OutreachDrafter(test_config, test_keys)
+    subject = d._normalize_subject(
+        "TMG Real Estate Advisors — hours back on admin", sample_lead
+    )
+    assert "—" not in subject
+    assert "–" not in subject
+    assert subject == "TMG real estate advisors, hours back on admin"
+
+
+def test_strip_en_dashes_from_subject(test_config, test_keys, sample_lead) -> None:
+    test_config.outreach.subject_casing = "sentence"
+    d = OutreachDrafter(test_config, test_keys)
+    subject = d._normalize_subject("Q1–Q2 admin savings", sample_lead)
+    assert "–" not in subject
+    assert subject == "Q1-q2 admin savings"
+
+
 def test_strip_em_dashes_from_body(test_config, test_keys, sample_lead) -> None:
     test_config.outreach.greeting_format = ""
     test_config.outreach.signature = ""
@@ -202,6 +222,25 @@ def test_strip_model_signoff_removes_name_and_best(test_config, test_keys, sampl
     assert body.count("Best,") == 1
     assert body.startswith("Jane,\n\nMain point here.")
     assert body.endswith("Tester")
+
+
+def test_followup_body_renders_paragraph_breaks_like_initial(
+    test_config, test_keys, sample_lead
+) -> None:
+    """Follow-up bodies with blank-line breaks use the same HTML render as initials."""
+    test_config.outreach.greeting_format = "Hi {first_name},"
+    test_config.outreach.signature = "{operator_email}"
+    d = OutreachDrafter(test_config, test_keys)
+    body = d._format_body(
+        "Still thinking about admin time on your team.\n\n"
+        "One thing teams like yours often miss: follow-ups slip when everyone is busy.\n\n"
+        "Open to a quick 15-minute call?",
+        sample_lead,
+    )
+    assert body.count("\n\n") >= 4
+    html = plain_text_body_to_html(body)
+    assert html.count("<p>") >= 5
+    assert "</p><p>" in html
 
 
 def test_footer_links_include_booking_url(test_config, test_keys, sample_lead) -> None:

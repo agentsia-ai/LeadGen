@@ -369,6 +369,7 @@ Keep it very short. Add a new angle or value point. Don't be pushy."""
         subject = (subject or "").strip()
         if not subject:
             return subject
+        subject = self._strip_em_dashes(subject)
         casing = (self.config.outreach.subject_casing or "sentence").strip().lower()
         if casing == "lowercase":
             return subject.lower()
