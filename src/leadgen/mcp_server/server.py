@@ -464,8 +464,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 "email": lead.contact.email,
                 "email_verified": lead.contact.email_verified,
                 "source": lead.source.value,
+                "employee_count": (
+                    lead.company.employee_count
+                    if not lead.company.employee_count_unknown
+                    else "unknown"
+                ),
             }
-            for lead in leads[:10]
+            for lead in leads
         ]
 
         return [TextContent(
