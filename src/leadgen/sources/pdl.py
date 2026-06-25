@@ -22,6 +22,26 @@ logger = logging.getLogger(__name__)
 PDL_BASE_URL = "https://api.peopledatalabs.com/v5"
 
 
+def _pdl_error_detail(response: httpx.Response) -> str:
+    """Extract a human-readable message from a PDL error response body."""
+    body = response.text or ""
+    if not body:
+        return f"HTTP {response.status_code} (empty body)"
+    try:
+        err = response.json()
+    except Exception:
+        return body
+    if isinstance(err.get("error"), dict):
+        msg = err["error"].get("message")
+        if msg:
+            return f"{err['error'].get('type', 'error')}: {msg}"
+    for key in ("message", "error"):
+        val = err.get(key)
+        if isinstance(val, str) and val:
+            return val
+    return body
+
+
 # PDL uses lowercase for location/industry values
 COUNTRY_ALIASES = {"us": "united states", "usa": "united states", "uk": "united kingdom"}
 
@@ -123,9 +143,11 @@ class PDLConnector:
                         {"range": {"job_company_employee_count": {"gte": lo, "lte": hi}}},
                         {
                             "bool": {
-                                "must_not": {
-                                    "exists": {"field": "job_company_employee_count"}
-                                }
+                                # PDL's ES subset requires must_not as a list, not a
+                                # bare clause object — a dict here yields 400.
+                                "must_not": [
+                                    {"exists": {"field": "job_company_employee_count"}}
+                                ]
                             }
                         },
                     ],
@@ -135,16 +157,25 @@ class PDLConnector:
         )
 
         # Industry — exact match against PDL's canonical taxonomy. job_company_industry
-        # is a keyword enum, so we use term/terms (exact), not full-text match, and
-        # we query ALL configured industries (resolved to valid PDL values), not just
-        # the first. Terms are pre-validated in search(); skip_industry is only set by
-        # an explicit, opt-in relaxation.
+        # is a keyword enum. Multi-industry uses bool.should of term clauses (OR),
+        # not a terms array — PDL accepts term/bool but rejects some terms[] shapes
+        # on this field. Terms are pre-validated in search(); skip_industry is only
+        # set by an explicit, opt-in relaxation.
         if icp.industries and not skip_industry:
             terms = self._pdl_industry_terms()
             if len(terms) == 1:
                 must.append({"term": {"job_company_industry": terms[0]}})
             elif terms:
-                must.append({"terms": {"job_company_industry": terms}})
+                must.append(
+                    {
+                        "bool": {
+                            "should": [
+                                {"term": {"job_company_industry": t}} for t in terms
+                            ],
+                            "minimum_should_match": 1,
+                        }
+                    }
+                )
 
         # Prefer records with email (free tier may not return value, but structure exists)
         must.append({"exists": {"field": "emails"}})
@@ -180,6 +211,14 @@ class PDLConnector:
             params["scroll_token"] = payload["scroll_token"]
 
         response = await self.client.get("/person/search", params=params)
+        if response.status_code == 400:
+            detail = _pdl_error_detail(response)
+            logger.error("PDL API error: 400 — %s", response.text)
+            raise httpx.HTTPStatusError(
+                f"PDL 400 Bad Request: {detail}",
+                request=response.request,
+                response=response,
+            )
         response.raise_for_status()
         return response.json()
 
@@ -289,6 +328,13 @@ class PDLConnector:
                     raise ValueError(
                         "PDL 402 Payment Required: Out of credits. "
                         "Free tier: 100 credits/month. Upgrade or wait for reset."
+                    ) from e
+                if e.response.status_code == 400:
+                    detail = _pdl_error_detail(e.response)
+                    logger.error("PDL API error: 400 — %s", e.response.text)
+                    raise ValueError(
+                        f"PDL 400 Bad Request (malformed query): {detail}\n"
+                        f"Full response body:\n{e.response.text}"
                     ) from e
                 logger.error(f"PDL API error: {e.response.status_code} — {e.response.text}")
                 raise

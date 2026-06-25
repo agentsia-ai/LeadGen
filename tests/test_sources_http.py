@@ -368,7 +368,7 @@ async def test_pdl_search_builds_es_query_and_parses_records(
     assert {"range": {"job_company_employee_count": {"gte": 10, "lte": 500}}} in should
     assert {
         "bool": {
-            "must_not": {"exists": {"field": "job_company_employee_count"}}
+            "must_not": [{"exists": {"field": "job_company_employee_count"}}]
         }
     } in should
 
@@ -458,7 +458,7 @@ async def test_pdl_relax_industry_opt_in_drops_filter_and_flags(
         next(iter(next(iter(c.values())).keys()))
         for c in queries[1]["bool"]["must"]
     ]
-    assert any(k in first_clause_kinds for k in ("term", "terms"))
+    assert any(k in first_clause_kinds for k in ("term", "terms", "bool"))
     assert any(
         "job_company_industry" in f
         for c in queries[0]["bool"]["must"]
@@ -496,6 +496,67 @@ async def test_pdl_402_raises_out_of_credits(test_config, test_keys) -> None:
     async with PDLConnector(test_config, test_keys) as p:
         with pytest.raises(ValueError, match="402"):
             await p.search(limit=1)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_pdl_400_surfaces_response_body(test_config, test_keys) -> None:
+    """400 responses must include PDL's full error body so operators see
+    which clause PDL rejected — not a bare HTTPStatusError."""
+    body = {
+        "status": 400,
+        "error": {
+            "type": "invalid_request_error",
+            "message": "The value of 'must_not' must be an array",
+        },
+    }
+    respx.get("https://api.peopledatalabs.com/v5/person/search").mock(
+        return_value=httpx.Response(400, json=body)
+    )
+    async with PDLConnector(test_config, test_keys) as p:
+        with pytest.raises(ValueError, match="must_not") as exc:
+            await p.search(limit=1)
+    assert "Full response body" in str(exc.value)
+    assert "must_not" in str(exc.value)
+
+
+def test_pdl_multi_industry_uses_bool_should_term_clauses(
+    test_config, test_keys
+) -> None:
+    """Multiple ICP industries must OR via bool.should + term, not a terms array."""
+    p = PDLConnector(test_config, test_keys)
+    payload = p._build_es_query()
+    must = payload["query"]["bool"]["must"]
+    industry_clause = next(
+        c
+        for c in must
+        if "bool" in c
+        and any(
+            "job_company_industry" in s.get("term", {})
+            for s in c["bool"].get("should", [])
+        )
+    )
+    should = industry_clause["bool"]["should"]
+    assert industry_clause["bool"]["minimum_should_match"] == 1
+    assert len(should) == 2  # SaaS + Fintech from test_config
+    assert all("term" in s and "job_company_industry" in s["term"] for s in should)
+    assert not any("terms" in c for c in must if "job_company_industry" in str(c))
+
+
+def test_pdl_size_filter_must_not_is_array(test_config, test_keys) -> None:
+    """PDL rejects must_not as a bare object; it must be a list of clauses."""
+    p = PDLConnector(test_config, test_keys)
+    payload = p._build_es_query()
+    size_clause = next(
+        c
+        for c in payload["query"]["bool"]["must"]
+        if "bool" in c and "should" in c["bool"]
+        and any("job_company_employee_count" in str(s) for s in c["bool"]["should"])
+    )
+    null_branch = size_clause["bool"]["should"][1]
+    must_not = null_branch["bool"]["must_not"]
+    assert isinstance(must_not, list)
+    assert must_not == [{"exists": {"field": "job_company_employee_count"}}]
 
 
 def test_pdl_parses_employee_count_range_string(test_config, test_keys) -> None:
