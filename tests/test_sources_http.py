@@ -364,7 +364,7 @@ async def test_pdl_search_builds_es_query_and_parses_records(
     # Size filter is a bool.should (in-band OR unknown headcount), not a bare range.
     size_clause = next(c for c in must if "bool" in c and "should" in c["bool"])
     should = size_clause["bool"]["should"]
-    assert size_clause["bool"]["minimum_should_match"] == 1
+    assert "minimum_should_match" not in size_clause["bool"]
     assert {"range": {"job_company_employee_count": {"gte": 10, "lte": 500}}} in should
     assert {
         "bool": {
@@ -537,10 +537,28 @@ def test_pdl_multi_industry_uses_bool_should_term_clauses(
         )
     )
     should = industry_clause["bool"]["should"]
-    assert industry_clause["bool"]["minimum_should_match"] == 1
+    assert "minimum_should_match" not in industry_clause["bool"]
     assert len(should) == 2  # SaaS + Fintech from test_config
     assert all("term" in s and "job_company_industry" in s["term"] for s in should)
     assert not any("terms" in c for c in must if "job_company_industry" in str(c))
+
+
+def _query_contains_minimum_should_match(obj: object) -> bool:
+    """True if any bool block in the ES query carries minimum_should_match."""
+    if isinstance(obj, dict):
+        if "minimum_should_match" in obj:
+            return True
+        return any(_query_contains_minimum_should_match(v) for v in obj.values())
+    if isinstance(obj, list):
+        return any(_query_contains_minimum_should_match(v) for v in obj)
+    return False
+
+
+def test_pdl_query_never_uses_minimum_should_match(test_config, test_keys) -> None:
+    """PDL rejects minimum_should_match — should-only bools rely on implicit >=1."""
+    p = PDLConnector(test_config, test_keys)
+    payload = p._build_es_query()
+    assert not _query_contains_minimum_should_match(payload)
 
 
 def test_pdl_size_filter_must_not_is_array(test_config, test_keys) -> None:
