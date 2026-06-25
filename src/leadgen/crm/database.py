@@ -13,7 +13,7 @@ from pathlib import Path
 
 import aiosqlite
 
-from leadgen._time import parse_iso
+from leadgen._time import now_utc, parse_iso
 from leadgen.models import Lead, LeadStatus
 
 logger = logging.getLogger(__name__)
@@ -75,7 +75,19 @@ class LeadDatabase:
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_email 
                 ON leads(contact_email) WHERE contact_email IS NOT NULL;
             """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS suppressions (
+                    suppression_key TEXT PRIMARY KEY,
+                    reason TEXT NOT NULL,
+                    source_lead_id TEXT,
+                    display_name TEXT,
+                    company_name TEXT,
+                    created_at TEXT NOT NULL,
+                    notes TEXT DEFAULT ''
+                )
+            """)
             await db.commit()
+        await self._backfill_suppressions()
         logger.info(f"Database initialized: {self.db_path}")
 
     @staticmethod
@@ -105,6 +117,124 @@ class LeadDatabase:
         if not full_name or not company_name:
             return None
         return f"name:{full_name.lower()}|company:{company_name.lower()}"
+
+    @staticmethod
+    def domain_suppression_key(domain: str) -> str:
+        """Suppression key for an entire company domain."""
+        return f"domain:{domain.lower().strip()}"
+
+    def identity_key_from_lead(self, lead: Lead) -> str | None:
+        """Email-independent identity key for a Lead model instance."""
+        return self._name_company_key(
+            lead.contact.model_dump(), lead.company.model_dump()
+        )
+
+    async def add_suppression(
+        self,
+        suppression_key: str,
+        reason: str,
+        *,
+        source_lead_id: str | None = None,
+        display_name: str | None = None,
+        company_name: str | None = None,
+        notes: str = "",
+    ) -> bool:
+        """Insert a suppression record. Returns True if newly added."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute(
+                """
+                INSERT OR IGNORE INTO suppressions
+                    (suppression_key, reason, source_lead_id, display_name,
+                     company_name, created_at, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    suppression_key,
+                    reason,
+                    source_lead_id,
+                    display_name,
+                    company_name,
+                    now_utc().isoformat(),
+                    notes,
+                ),
+            )
+            await db.commit()
+            return cur.rowcount > 0
+
+    async def is_suppression_key(self, suppression_key: str) -> tuple[bool, str | None]:
+        """Return (True, reason) if *suppression_key* is on the suppression set."""
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT reason FROM suppressions WHERE suppression_key = ?",
+                (suppression_key,),
+            ) as cur:
+                row = await cur.fetchone()
+                if row:
+                    return True, row[0]
+                return False, None
+
+    async def check_lead_suppressed(self, lead: Lead) -> tuple[bool, str | None]:
+        """Check name+company identity and company domain against suppressions."""
+        identity_key = self.identity_key_from_lead(lead)
+        if identity_key:
+            suppressed, reason = await self.is_suppression_key(identity_key)
+            if suppressed:
+                return True, reason
+        if lead.company.domain:
+            suppressed, reason = await self.is_suppression_key(
+                self.domain_suppression_key(lead.company.domain)
+            )
+            if suppressed:
+                return True, reason
+        return False, None
+
+    async def list_suppressions(self, limit: int = 100) -> list[dict]:
+        """Return suppression records for operator review."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM suppressions ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ) as cur:
+                rows = await cur.fetchall()
+                return [dict(row) for row in rows]
+
+    async def _backfill_suppressions(self) -> None:
+        """Seed suppressions from existing terminal-status leads (idempotent)."""
+        from leadgen.crm.suppression import SUPPRESSION_TAGS
+
+        terminal_statuses = {"closed_lost", "unsubscribed"}
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT id, status, contact_json, company_json, tags_json, "
+                "company_name FROM leads"
+            ) as cur:
+                rows = await cur.fetchall()
+
+        for lead_id, status, contact_json, company_json, tags_json, company_name in rows:
+            tags = json.loads(tags_json)
+            tag_reason = next(
+                (t.lower() for t in tags if t.lower() in SUPPRESSION_TAGS),
+                None,
+            )
+            if status not in terminal_statuses and not tag_reason:
+                continue
+            reason = status if status in terminal_statuses else tag_reason
+            contact = json.loads(contact_json)
+            company = json.loads(company_json)
+            key = self._name_company_key(contact, company)
+            if not key:
+                continue
+            first = contact.get("first_name") or ""
+            last = contact.get("last_name") or ""
+            full_name = (contact.get("full_name") or f"{first} {last}").strip()
+            await self.add_suppression(
+                key,
+                reason,
+                source_lead_id=lead_id,
+                display_name=full_name or None,
+                company_name=company_name,
+            )
 
     async def upsert(self, lead: Lead, dedupe_on_identity: bool = False) -> bool:
         """Insert or update a lead. Returns True if new, False if updated.

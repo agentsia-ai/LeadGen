@@ -202,8 +202,11 @@ class EmailSender:
 
     async def handle_unsubscribe(self, lead: Lead) -> None:
         """Mark a lead as unsubscribed."""
+        from leadgen.crm.suppression import sync_suppression_from_lead
+
         lead.status = LeadStatus.UNSUBSCRIBED
         lead.touch()
+        await sync_suppression_from_lead(self.db, lead)
         await self.db.upsert(lead)
         logger.info(f"Marked {lead.display_name} as UNSUBSCRIBED")
 

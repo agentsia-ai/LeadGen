@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from leadgen.crm.database import EmailCollisionError, LeadDatabase
+from leadgen.crm.suppression import sync_suppression_from_lead
 from leadgen.models import LeadStatus
 
 if TYPE_CHECKING:
@@ -85,6 +86,7 @@ async def update_lead(
         updated_fields.append("note")
 
     lead.touch()
+    await sync_suppression_from_lead(db, lead)
     try:
         await db.upsert(lead)
     except EmailCollisionError as exc:
