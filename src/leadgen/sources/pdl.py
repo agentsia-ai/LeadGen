@@ -133,6 +133,7 @@ class PDLConnector:
         # Company size — in-band OR headcount unknown/missing. A plain range in
         # `must` silently drops null job_company_employee_count (common for
         # solopreneurs); wrap as should so unknown-size records stay eligible.
+        # No minimum_should_match — PDL forbids it; should-only bools match >=1.
         size_cfg = icp.company_size
         lo = size_cfg.get("min_employees", 1)
         hi = size_cfg.get("max_employees", 10000)
@@ -151,7 +152,6 @@ class PDLConnector:
                             }
                         },
                     ],
-                    "minimum_should_match": 1,
                 }
             }
         )
@@ -159,8 +159,9 @@ class PDLConnector:
         # Industry — exact match against PDL's canonical taxonomy. job_company_industry
         # is a keyword enum. Multi-industry uses bool.should of term clauses (OR),
         # not a terms array — PDL accepts term/bool but rejects some terms[] shapes
-        # on this field. Terms are pre-validated in search(); skip_industry is only
-        # set by an explicit, opt-in relaxation.
+        # on this field. Omit minimum_should_match: PDL forbids that key; a
+        # should-only bool implicitly requires >=1 match. Terms are pre-validated
+        # in search(); skip_industry is only set by an explicit, opt-in relaxation.
         if icp.industries and not skip_industry:
             terms = self._pdl_industry_terms()
             if len(terms) == 1:
@@ -172,7 +173,6 @@ class PDLConnector:
                             "should": [
                                 {"term": {"job_company_industry": t}} for t in terms
                             ],
-                            "minimum_should_match": 1,
                         }
                     }
                 )
