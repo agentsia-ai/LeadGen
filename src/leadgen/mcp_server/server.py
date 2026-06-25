@@ -437,7 +437,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 leads = await apollo.search(limit=limit)
 
         added = 0
+        suppressed = 0
+        from leadgen.crm.suppression import check_lead_suppressed
+
         for lead in leads:
+            is_blocked, _reason = await check_lead_suppressed(db, lead)
+            if is_blocked:
+                suppressed += 1
+                continue
             is_new = await db.upsert(lead, dedupe_on_identity=True)
             if is_new:
                 added += 1
@@ -467,6 +474,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 "source": src or ("hunter" if domain else "apollo"),
                 "fetched": len(leads),
                 "new_leads_added": added,
+                "suppressed_skipped": suppressed,
                 "preview": preview,
             }, indent=2)
         )]
@@ -504,6 +512,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     continue
 
                 company = lead.company.name or "unknown company"
+                from leadgen.crm.suppression import check_lead_suppressed
+
+                is_blocked, suppress_reason = await check_lead_suppressed(db, lead)
+                if is_blocked:
+                    results.append({
+                        "lead_id": lead.id, "name": lead.display_name, "company": company,
+                        "status": "suppressed",
+                        "reason": f"previously {suppress_reason}",
+                    })
+                    continue
+
                 if lead.contact.email and lead.contact.email_verified:
                     # Skip — don't re-spend Hunter on an already-verified lead.
                     results.append({
@@ -936,6 +955,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
     elif name == "update_lead_status":
+        from leadgen.crm.suppression import sync_suppression_from_lead
+
         lead = await db.get(arguments["lead_id"])
         if not lead:
             return [TextContent(type="text", text=json.dumps({"error": "Lead not found"}))]
@@ -944,6 +965,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         if "notes" in arguments:
             lead.notes = (lead.notes + "\n" + arguments["notes"]).strip()
         lead.touch()
+        await sync_suppression_from_lead(db, lead)
         await db.upsert(lead)
         return [TextContent(type="text", text=json.dumps({"updated": True, "status": lead.status.value}))]
 

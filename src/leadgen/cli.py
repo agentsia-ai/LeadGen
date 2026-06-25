@@ -105,13 +105,26 @@ def search(ctx, limit, source, domain, relax_industry):
                     leads = await apollo.search(limit=limit)
 
         added = 0
+        suppressed = 0
+        from leadgen.crm.suppression import check_lead_suppressed
+
         for lead in leads:
+            is_blocked, reason = await check_lead_suppressed(db, lead)
+            if is_blocked:
+                suppressed += 1
+                continue
             is_new = await db.upsert(lead, dedupe_on_identity=True)
             if is_new:
                 added += 1
 
         source_name = "Hunter" if use_hunter else ("People Data Labs" if use_pdl else "Apollo")
-        console.print(f"[green]OK[/green] Fetched {len(leads)} leads from {source_name}, {added} new added to database.")
+        msg = (
+            f"[green]OK[/green] Fetched {len(leads)} leads from {source_name}, "
+            f"{added} new added to database."
+        )
+        if suppressed:
+            msg += f" {suppressed} suppressed (previously closed_lost/unsubscribed)."
+        console.print(msg)
 
     asyncio.run(_run())
 
@@ -226,9 +239,29 @@ def enrich(ctx, limit):
         await db.init()
 
         leads = await db.list(status=LeadStatus.NEW, limit=limit * 2)  # Fetch extra, filter below
-        needs_email = [l for l in leads if not l.contact.email][:limit]
+        from leadgen.crm.suppression import check_lead_suppressed
+
+        needs_email = []
+        suppressed = 0
+        for lead in leads:
+            if lead.contact.email:
+                continue
+            is_blocked, _reason = await check_lead_suppressed(db, lead)
+            if is_blocked:
+                suppressed += 1
+                continue
+            needs_email.append(lead)
+            if len(needs_email) >= limit:
+                break
         if not needs_email:
-            console.print("[yellow]No leads need enrichment (all have emails or none match criteria).[/yellow]")
+            if suppressed:
+                console.print(
+                    f"[yellow]No leads need enrichment — {suppressed} skipped as suppressed.[/yellow]"
+                )
+            else:
+                console.print(
+                    "[yellow]No leads need enrichment (all have emails or none match criteria).[/yellow]"
+                )
             return
 
         with console.status(f"Enriching {len(needs_email)} leads with Hunter..."):
@@ -244,10 +277,13 @@ def enrich(ctx, limit):
 
         found = sum(1 for l in enriched if l.contact.email)
         verified = sum(1 for l in enriched if l.contact.email_verified)
-        console.print(
+        msg = (
             f"[green]OK[/green] Enriched {len(enriched)} leads: {found} emails found, "
             f"{verified} verified. {updated} saved to database."
         )
+        if suppressed:
+            msg += f" {suppressed} skipped as suppressed (no Hunter credits spent)."
+        console.print(msg)
 
     asyncio.run(_run())
 
@@ -324,6 +360,107 @@ def update_lead_cmd(ctx, lead_id, email, domain, phone, email_verified, verify, 
         console.print(f"  email_verified: {result.get('email_verified')}")
         console.print(f"  domain: {result.get('domain') or '-'}")
         console.print(f"  status: {result.get('status')}")
+
+    asyncio.run(_run())
+
+
+@main.command("suppress")
+@click.option("--lead-id", default=None, help="Suppress by existing lead id (uses name+company).")
+@click.option("--name", default=None, help="Person name (requires --company).")
+@click.option("--company", default=None, help="Company name (requires --name).")
+@click.option("--domain", default=None, help="Suppress all leads at this company domain.")
+@click.option("--reason", default="manual", help="Reason recorded on the suppression (default: manual).")
+@click.option("--list", "show_list", is_flag=True, help="List current suppressions.")
+@click.option("--limit", default=50, help="Max rows when using --list.")
+@click.pass_context
+def suppress(ctx, lead_id, name, company, domain, reason, show_list, limit):
+    """Add or list permanent suppressions (excluded from future fetch/enrich).
+
+    Suppressions persist even if the lead row is deleted. Cleanup delete of
+    unworked `new` leads does NOT add suppressions.
+    """
+    async def _run():
+        from leadgen.config.loader import load_config
+        from leadgen.crm.database import LeadDatabase
+
+        cfg = load_config(ctx.obj.get("config_path"))
+        db = LeadDatabase(cfg.database.sqlite_path)
+        await db.init()
+
+        if show_list:
+            rows = await db.list_suppressions(limit=limit)
+            if not rows:
+                console.print("[yellow]No suppressions on file.[/yellow]")
+                return
+            table = Table(title=f"Suppressions (up to {limit})", show_header=True)
+            table.add_column("Key", style="dim", max_width=40)
+            table.add_column("Reason", max_width=16)
+            table.add_column("Name", max_width=20)
+            table.add_column("Company", max_width=20)
+            table.add_column("Added", max_width=20)
+            for row in rows:
+                table.add_row(
+                    row["suppression_key"][:40],
+                    row["reason"],
+                    row["display_name"] or "-",
+                    row["company_name"] or "-",
+                    row["created_at"][:19],
+                )
+            console.print(table)
+            return
+
+        modes = sum(bool(x) for x in (lead_id, domain, name and company))
+        if modes != 1:
+            raise click.UsageError(
+                "Specify exactly one of: --lead-id, --domain, or both --name and --company."
+            )
+
+        if lead_id:
+            lead = await db.get(lead_id)
+            if not lead:
+                console.print(f"[red]X[/red] No lead with id {lead_id}")
+                return
+            key = db.identity_key_from_lead(lead)
+            if not key:
+                console.print(
+                    "[red]X[/red] Lead lacks both person name and company — cannot suppress."
+                )
+                return
+            added = await db.add_suppression(
+                key,
+                reason,
+                source_lead_id=lead.id,
+                display_name=lead.display_name,
+                company_name=lead.company.name,
+            )
+            label = f"{lead.display_name} @ {lead.company.name}"
+        elif domain:
+            key = db.domain_suppression_key(domain)
+            added = await db.add_suppression(
+                key,
+                reason,
+                company_name=domain,
+            )
+            label = f"domain {domain}"
+        else:
+            contact = {"full_name": name, "first_name": "", "last_name": ""}
+            company_dict = {"name": company}
+            key = db._name_company_key(contact, company_dict)
+            if not key:
+                console.print("[red]X[/red] --name and --company must both be non-empty.")
+                return
+            added = await db.add_suppression(
+                key,
+                reason,
+                display_name=name,
+                company_name=company,
+            )
+            label = f"{name} @ {company}"
+
+        if added:
+            console.print(f"[green]OK[/green] Suppressed {label} ({reason}).")
+        else:
+            console.print(f"[yellow]Already suppressed:[/yellow] {label}")
 
     asyncio.run(_run())
 
