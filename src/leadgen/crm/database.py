@@ -364,6 +364,64 @@ class LeadDatabase:
             await db.commit()
             return count
 
+    async def get_by_ids(self, ids: list[str]) -> list[Lead]:
+        """Fetch leads whose ids are in *ids* (order not guaranteed)."""
+        if not ids:
+            return []
+        placeholders = ",".join("?" * len(ids))
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                f"SELECT * FROM leads WHERE id IN ({placeholders})",
+                ids,
+            ) as cur:
+                rows = await cur.fetchall()
+                return [self._row_to_lead(row) for row in rows]
+
+    async def delete_by_ids(self, ids: list[str]) -> int:
+        """Delete leads by id. Returns the number of rows removed.
+
+        Destructive and irreversible — intended for the CLI `delete` command,
+        which gates it behind an interactive confirmation. Deliberately not
+        exposed as an MCP tool so the agent can never call it.
+        """
+        if not ids:
+            return 0
+        placeholders = ",".join("?" * len(ids))
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                f"SELECT COUNT(*) FROM leads WHERE id IN ({placeholders})",
+                ids,
+            ) as cur:
+                row = await cur.fetchone()
+                count = row[0] if row else 0
+            await db.execute(
+                f"DELETE FROM leads WHERE id IN ({placeholders})",
+                ids,
+            )
+            await db.commit()
+            return count
+
+    async def delete_by_status(self, status: LeadStatus) -> int:
+        """Delete all leads with the given status. Returns rows removed.
+
+        Only rows whose status exactly matches *status* are deleted — other
+        statuses are untouched. Destructive and irreversible — intended for
+        the CLI `delete` command. Deliberately not exposed as an MCP tool.
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT COUNT(*) FROM leads WHERE status = ?",
+                (status.value,),
+            ) as cur:
+                row = await cur.fetchone()
+                count = row[0] if row else 0
+            await db.execute(
+                "DELETE FROM leads WHERE status = ?",
+                (status.value,),
+            )
+            await db.commit()
+            return count
+
     async def count_by_status(self) -> dict[str, int]:
         """Return lead counts grouped by status."""
         async with aiosqlite.connect(self.db_path) as db:
