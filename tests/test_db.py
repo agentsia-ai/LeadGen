@@ -364,6 +364,62 @@ async def test_get_missing_returns_none(initialized_db: LeadDatabase) -> None:
 # ── init() idempotency ────────────────────────────────────────────────────────
 
 
+# ── Targeted delete (CLI-only) ────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_delete_by_ids_removes_only_those_leads(
+    initialized_db: LeadDatabase,
+) -> None:
+    """delete_by_ids removes only the requested rows; other leads stay."""
+    keep = _lead(email="keep@example.com", name="KeepCo")
+    drop_a = _lead(email="drop-a@example.com", name="DropA")
+    drop_b = _lead(email="drop-b@example.com", name="DropB")
+    await initialized_db.upsert(keep)
+    await initialized_db.upsert(drop_a)
+    await initialized_db.upsert(drop_b)
+
+    deleted = await initialized_db.delete_by_ids([drop_a.id, drop_b.id])
+
+    assert deleted == 2
+    assert await initialized_db.get(drop_a.id) is None
+    assert await initialized_db.get(drop_b.id) is None
+    assert await initialized_db.get(keep.id) is not None
+    assert await initialized_db.count_all() == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_by_status_removes_only_that_status(
+    initialized_db: LeadDatabase,
+) -> None:
+    """delete_by_status removes only rows with the exact status given."""
+    new_a = _lead(email="new-a@example.com", status=LeadStatus.NEW)
+    new_b = _lead(email="new-b@example.com", status=LeadStatus.NEW)
+    contacted = _lead(email="contacted@example.com", status=LeadStatus.CONTACTED)
+    following = _lead(email="follow@example.com", status=LeadStatus.FOLLOWING_UP)
+    queued = _lead(email="queued@example.com", status=LeadStatus.QUEUED)
+    enriched = _lead(email="enriched@example.com", status=LeadStatus.ENRICHED)
+    closed = _lead(email="lost@example.com", status=LeadStatus.CLOSED_LOST)
+    for lead in (new_a, new_b, contacted, following, queued, enriched, closed):
+        await initialized_db.upsert(lead)
+
+    deleted = await initialized_db.delete_by_status(LeadStatus.NEW)
+
+    assert deleted == 2
+    assert await initialized_db.get(new_a.id) is None
+    assert await initialized_db.get(new_b.id) is None
+    for survivor in (contacted, following, queued, enriched, closed):
+        assert await initialized_db.get(survivor.id) is not None
+    assert await initialized_db.count_all() == 5
+    counts = await initialized_db.count_by_status()
+    assert counts.get("new", 0) == 0
+    assert counts.get("contacted") == 1
+    assert counts.get("following_up") == 1
+    assert counts.get("queued") == 1
+    assert counts.get("enriched") == 1
+    assert counts.get("closed_lost") == 1
+
+
 @pytest.mark.asyncio
 async def test_init_is_idempotent(tmp_db_path: str) -> None:
     """Calling init() twice on the same path must not raise — the MCP

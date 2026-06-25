@@ -444,6 +444,120 @@ def purge(ctx, yes):
     asyncio.run(_run())
 
 
+def _lead_delete_preview_rows(leads) -> list[tuple[str, str, str, str, str]]:
+    """Build table rows for delete confirmation previews."""
+    rows = []
+    for lead in leads:
+        name = (
+            lead.contact.full_name
+            or f"{lead.contact.first_name or ''} {lead.contact.last_name or ''}".strip()
+            or "-"
+        )
+        rows.append(
+            (
+                lead.id[:12] + "..." if len(lead.id) > 12 else lead.id,
+                name[:25],
+                (lead.company.name or "-")[:25],
+                (lead.contact.email or "-")[:30],
+                lead.status.value,
+            )
+        )
+    return rows
+
+
+@main.command("delete")
+@click.option(
+    "--ids",
+    default=None,
+    help="Comma-separated lead ids to delete (mutually exclusive with --status).",
+)
+@click.option(
+    "--status",
+    default=None,
+    help="Delete all leads in this status, e.g. new (mutually exclusive with --ids).",
+)
+@click.option("--yes", is_flag=True, help="Skip the confirmation prompt (for scripted use).")
+@click.pass_context
+def delete_leads(ctx, ids, status, yes):
+    """Delete targeted leads from the active database. Destructive and irreversible.
+
+    CLI-only by design: this is intentionally NOT exposed as an MCP tool so the
+    agent can never delete leads on its own.
+    """
+    if ids and status:
+        raise click.UsageError("Cannot specify both --ids and --status.")
+    if not ids and not status:
+        raise click.UsageError("Must specify --ids or --status.")
+
+    async def _run():
+        from leadgen.config.loader import load_config
+        from leadgen.crm.database import LeadDatabase
+        from leadgen.models import LeadStatus
+
+        cfg = load_config(ctx.obj.get("config_path"))
+        db = LeadDatabase(cfg.database.sqlite_path)
+        await db.init()
+
+        sample_limit = 5
+
+        if ids:
+            id_list = [i.strip() for i in ids.split(",") if i.strip()]
+            if not id_list:
+                console.print("[red]X[/red] --ids was empty after parsing.")
+                return
+            preview = await db.get_by_ids(id_list)
+            count = len(preview)
+            if count == 0:
+                console.print("[yellow]No matching leads found for the given ids.[/yellow]")
+                return
+            target_desc = f"{count} lead(s) by id"
+        else:
+            try:
+                status_filter = LeadStatus(status)
+            except ValueError:
+                valid = ", ".join(s.value for s in LeadStatus)
+                console.print(f"[red]X[/red] Unknown status {status!r}. Valid: {valid}")
+                return
+            preview = await db.list(status=status_filter, limit=sample_limit)
+            counts = await db.count_by_status()
+            count = counts.get(status_filter.value, 0)
+            if count == 0:
+                console.print(
+                    f"[yellow]No leads with status {status_filter.value!r} to delete.[/yellow]"
+                )
+                return
+            target_desc = f"{count} lead(s) with status {status_filter.value!r}"
+
+        if not yes:
+            console.print(
+                f"[bold red]About to delete {target_desc}[/bold red] from "
+                f"[cyan]{cfg.database.sqlite_path}[/cyan]. This cannot be undone."
+            )
+            table = Table(title=f"Sample (up to {sample_limit})", show_header=True)
+            table.add_column("ID", style="dim", max_width=12)
+            table.add_column("Name", max_width=25)
+            table.add_column("Company", max_width=25)
+            table.add_column("Email", max_width=30)
+            table.add_column("Status", max_width=10)
+            for row in _lead_delete_preview_rows(preview):
+                table.add_row(*row)
+            console.print(table)
+            if count > sample_limit:
+                console.print(f"[dim]... and {count - sample_limit} more[/dim]")
+            if not click.confirm(f"Delete {count} lead(s)?"):
+                console.print("[yellow]Aborted. No leads were deleted.[/yellow]")
+                return
+
+        if ids:
+            deleted = await db.delete_by_ids(id_list)
+        else:
+            deleted = await db.delete_by_status(status_filter)
+
+        console.print(f"[green]OK[/green] Deleted {deleted} lead(s).")
+
+    asyncio.run(_run())
+
+
 @main.command()
 @click.pass_context
 def pipeline(ctx):
