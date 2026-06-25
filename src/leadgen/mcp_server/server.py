@@ -352,6 +352,71 @@ async def list_tools() -> list[Tool]:
                 "required": ["lead_id"],
             },
         ),
+        Tool(
+            name="suppress_lead",
+            description=(
+                "Permanently suppress a lead (or company domain) from future fetch/enrich. "
+                "Non-destructive and reversible via unsuppress_lead. Requires exactly one "
+                "identifier — no bulk suppress."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "lead_id": {
+                        "type": "string",
+                        "description": "Existing lead id (uses name+company identity)",
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Person name (requires company)",
+                    },
+                    "company": {
+                        "type": "string",
+                        "description": "Company name (requires name)",
+                    },
+                    "domain": {
+                        "type": "string",
+                        "description": "Suppress all leads at this company domain",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Reason recorded (e.g. icp_mismatch, replied_no, exhausted, manual)",
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="unsuppress_lead",
+            description=(
+                "Remove a suppression entry so the identity can be fetched/enriched again. "
+                "Requires exactly one identifier — no bulk unsuppress."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "suppression_key": {
+                        "type": "string",
+                        "description": "Exact suppression_key from suppress_lead or the suppressions table",
+                    },
+                    "lead_id": {
+                        "type": "string",
+                        "description": "Existing lead id (resolves to name+company identity key)",
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Person name (requires company)",
+                    },
+                    "company": {
+                        "type": "string",
+                        "description": "Company name (requires name)",
+                    },
+                    "domain": {
+                        "type": "string",
+                        "description": "Domain-level suppression key to remove",
+                    },
+                },
+            },
+        ),
     ]
 
 
@@ -1001,6 +1066,32 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             ],
             "notes": lead.notes,
         })
+
+    elif name == "suppress_lead":
+        from leadgen.crm.suppression import add_operator_suppression
+
+        result = await add_operator_suppression(
+            db,
+            lead_id=arguments.get("lead_id"),
+            name=arguments.get("name"),
+            company=arguments.get("company"),
+            domain=arguments.get("domain"),
+            reason=arguments.get("reason", "manual"),
+        )
+        return _json(result)
+
+    elif name == "unsuppress_lead":
+        from leadgen.crm.suppression import remove_operator_suppression
+
+        result = await remove_operator_suppression(
+            db,
+            suppression_key=arguments.get("suppression_key"),
+            lead_id=arguments.get("lead_id"),
+            name=arguments.get("name"),
+            company=arguments.get("company"),
+            domain=arguments.get("domain"),
+        )
+        return _json(result)
 
     return [TextContent(type="text", text=json.dumps({"error": f"Unknown tool: {name}"}))]
 

@@ -199,6 +199,16 @@ class LeadDatabase:
                 rows = await cur.fetchall()
                 return [dict(row) for row in rows]
 
+    async def remove_suppression(self, suppression_key: str) -> bool:
+        """Delete a suppression record. Returns True if a row was removed."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute(
+                "DELETE FROM suppressions WHERE suppression_key = ?",
+                (suppression_key,),
+            )
+            await db.commit()
+            return cur.rowcount > 0
+
     async def _backfill_suppressions(self) -> None:
         """Seed suppressions from existing terminal-status leads (idempotent)."""
         from leadgen.crm.suppression import SUPPRESSION_TAGS
