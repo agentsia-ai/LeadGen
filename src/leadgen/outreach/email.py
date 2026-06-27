@@ -21,7 +21,7 @@ import aiosmtplib
 from leadgen.config.loader import APIKeys, LeadGenConfig, outbound_from_email, outbound_from_name
 from leadgen._time import now_utc
 from leadgen.crm.database import LeadDatabase
-from leadgen.models import Lead, LeadStatus, OutreachRecord
+from leadgen.models import INERT_STATUSES, Lead, LeadStatus, OutreachRecord
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +105,9 @@ class EmailSender:
             return False
         if record.sent_at:
             logger.info(f"Outreach {record.id} already sent — refusing duplicate")
+            return False
+        if lead.status in INERT_STATUSES:
+            logger.info(f"Lead {lead.display_name} is {lead.status.value} — skipping send")
             return False
         if not lead.contact.email:
             logger.warning(f"No email address for {lead.display_name} — skipping")

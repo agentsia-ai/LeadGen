@@ -28,6 +28,11 @@ class LeadStatus(str, Enum):
     CLOSED_LOST = "closed_lost"
     UNSUBSCRIBED = "unsubscribed"
     BOUNCED = "bounced"
+    DEFERRED = "deferred"       # parked for later revisit — inert, not suppressed
+
+
+# Statuses excluded from score/draft/send automation.
+INERT_STATUSES = frozenset({LeadStatus.DEFERRED})
 
 
 class LeadSource(str, Enum):
