@@ -33,7 +33,7 @@ from leadgen.ai.drafter import OutreachDrafter
 from leadgen.ai.scorer import LeadScorer
 from leadgen.config.loader import display_agent_name, load_api_keys, load_config
 from leadgen.crm.database import EmailCollisionError, LeadDatabase
-from leadgen.models import LeadStatus
+from leadgen.models import INERT_STATUSES, LeadStatus
 
 logger = logging.getLogger(__name__)
 
@@ -335,7 +335,7 @@ async def list_tools() -> list[Tool]:
                 "type": "object",
                 "properties": {
                     "lead_id": {"type": "string"},
-                    "status": {"type": "string", "description": "New status value"},
+                    "status": {"type": "string", "description": "New status value (e.g. deferred, new, scored)"},
                     "notes": {"type": "string", "description": "Optional notes to add"},
                 },
                 "required": ["lead_id", "status"],
@@ -429,6 +429,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "get_pipeline":
         counts = await db.count_by_status()
         top_leads = await db.list(min_score=0.7, limit=5)
+        top_leads = [l for l in top_leads if l.status not in INERT_STATUSES]
 
         summary = {
             "agent": display_agent_name(config),
@@ -683,12 +684,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         else:
             leads = await db.list(status=LeadStatus.NEW, limit=limit)
 
+        skipped_inert = [l.id for l in leads if l.status in INERT_STATUSES]
+        leads = [l for l in leads if l.status not in INERT_STATUSES]
+
         if not leads:
             payload: dict = {
                 "leads_scored": 0,
                 "passed_threshold": 0,
                 "threshold": config.scoring.threshold,
             }
+            if skipped_inert:
+                payload["skipped_inert"] = skipped_inert
             if not_found:
                 payload["not_found"] = not_found
             return [TextContent(type="text", text=json.dumps(payload))]
@@ -705,6 +711,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             "passed_threshold": len(scored),
             "threshold": config.scoring.threshold,
         }
+        if skipped_inert:
+            payload["skipped_inert"] = skipped_inert
         if not_found:
             payload["not_found"] = not_found
         return [TextContent(type="text", text=json.dumps(payload))]
@@ -720,6 +728,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
         drafted = []
         for lead in leads:
+            if lead.status in INERT_STATUSES:
+                continue
             record = await drafter.draft_initial(lead)
             lead.supersede_unapproved_drafts_at_step(record.sequence_step)
             lead.outreach_history.append(record)
@@ -746,6 +756,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         lead = await db.get(lead_id)
         if not lead:
             return _json({"error": "Lead not found", "lead_id": lead_id})
+
+        if lead.status in INERT_STATUSES:
+            return _json({
+                "error": f"Lead is {lead.status.value} — inert, not eligible for follow-up drafts",
+                "lead_id": lead_id,
+            })
 
         if lead.next_follow_up_step < 1:
             return _json({
@@ -817,6 +833,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         lead = await db.get(lead_id)
         if not lead:
             return _json({"error": "Lead not found", "lead_id": lead_id})
+
+        if lead.status in INERT_STATUSES:
+            return _json({
+                "error": f"Lead is {lead.status.value} — inert, not eligible for send",
+                "lead_id": lead_id,
+            })
 
         outreach_id = arguments.get("outreach_id")
         if outreach_id:
