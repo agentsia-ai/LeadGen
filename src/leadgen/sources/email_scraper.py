@@ -129,6 +129,63 @@ JUNK_LOCAL_PREFIXES = (
     "null",
 )
 
+# Registered-looking gTLDs (3+ chars). Two-letter suffixes are treated as ccTLDs.
+PLAUSIBLE_GTlds = frozenset({
+    "aaa", "aarp", "abogado", "academy", "accountant", "accountants", "actor",
+    "ads", "adult", "aero", "agency", "airforce", "apartments", "app", "archi",
+    "army", "art", "associates", "attorney", "auction", "audio", "auto", "autos",
+    "baby", "band", "bank", "bar", "bargains", "beer", "best", "bet", "bid",
+    "bike", "bingo", "bio", "biz", "black", "blog", "blue", "boats", "bond",
+    "boutique", "build", "builders", "business", "buzz", "cab", "cafe", "cam",
+    "camp", "capital", "cards", "care", "careers", "cash", "casino", "catering",
+    "center", "ceo", "chat", "cheap", "church", "city", "claims", "cleaning",
+    "clinic", "clothing", "cloud", "club", "coach", "codes", "coffee", "college",
+    "com", "community", "company", "computer", "condos", "construction", "consulting",
+    "contact", "contractors", "cooking", "cool", "coop", "country", "coupons",
+    "credit", "creditcard", "cruises", "dance", "dating", "day", "deals",
+    "degree", "delivery", "dental", "dentist", "design", "dev", "diamonds",
+    "digital", "direct", "directory", "discount", "doctor", "dog", "domains",
+    "download", "earth", "edu", "education", "email", "energy", "engineer", "engineering",
+    "enterprises", "equipment", "estate", "events", "exchange", "expert",
+    "experts", "fail", "family", "fan", "farm", "finance", "financial", "fish",
+    "fit", "fitness", "flights", "florist", "flowers", "food", "football",
+    "forsale", "foundation", "fund", "furniture", "futbol", "fyi", "gallery",
+    "game", "games", "garden", "gift", "gifts", "gives", "glass", "global",
+    "gmbh", "gold", "golf", "gov", "graphics", "gratis", "green", "gripe", "group",
+    "guide", "guru", "health", "healthcare", "help", "hiphop", "hockey", "holdings",
+    "holiday", "homes", "horse", "hospital", "host", "hosting", "house", "how",
+    "immo", "immobilien", "industries", "info", "ink", "institute", "insurance",
+    "insure", "int", "international", "investments", "jewelry", "jobs", "juegos", "kaufen",
+    "kim", "kitchen", "land", "law", "lawyer", "lawyers", "lease", "legal",
+    "lgbt", "life", "lighting", "limited", "limo", "link", "live", "loan",
+    "loans", "lol", "love", "ltd", "luxury", "maison", "management", "market",
+    "marketing", "markets", "mba", "media", "memorial", "men", "menu", "mil",
+    "mobi", "moda", "moe", "money", "mortgage", "movie", "museum", "name", "navy",
+    "net", "network", "news", "ninja", "one", "online", "org", "organic", "partners", "parts",
+    "party", "pet", "photo", "photography", "photos", "pics", "pictures", "pizza",
+    "place", "plumbing", "plus", "poker", "press", "pro", "productions",
+    "properties", "property", "pub", "qpon", "recipes", "red", "rehab", "reise",
+    "reisen", "rent", "rentals", "repair", "report", "republican", "rest",
+    "restaurant", "reviews", "rich", "rip", "rocks", "rodeo", "run", "sale",
+    "salon", "sarl", "school", "schule", "science", "services", "sexy", "shiksha",
+    "shoes", "shop", "shopping", "show", "singles", "site", "ski", "social",
+    "software", "solar", "solutions", "space", "store", "studio", "style",
+    "supplies", "supply", "support", "surgery", "systems", "tax", "taxi", "team",
+    "tech", "technology", "tel", "tennis", "theater", "theatre", "tienda", "tips",
+    "today", "tools", "top", "tours", "town", "toys", "trade", "training",
+    "travel", "university", "uno", "vacations", "ventures", "vet", "viajes",
+    "video", "villas", "vin", "vision", "voyage", "watch", "webcam", "website",
+    "wedding", "wiki", "win", "wine", "work", "works", "world", "wtf", "xyz",
+    "yoga", "zone",
+})
+
+COMPOUND_TLD_PREFIXES = frozenset({
+    "ac", "co", "com", "edu", "gov", "ltd", "me", "mil", "net", "nhs", "org",
+    "plc", "sch",
+})
+
+DOMAIN_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
+
 EMAIL_RE = re.compile(
     r"[a-zA-Z0-9._%+\'-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
     re.IGNORECASE,
@@ -221,12 +278,65 @@ def _is_contactish_anchor(text: str) -> bool:
     return any(keyword in lowered for keyword in CONTACT_ANCHOR_KEYWORDS)
 
 
+def _effective_tld(domain: str) -> str | None:
+    """Return the registrable suffix used for TLD plausibility checks."""
+    labels = domain.lower().split(".")
+    if len(labels) < 2:
+        return None
+    if (
+        len(labels) >= 3
+        and labels[-2] in COMPOUND_TLD_PREFIXES
+        and len(labels[-1]) == 2
+        and labels[-1].isalpha()
+    ):
+        return labels[-1]
+    return labels[-1]
+
+
+def _has_plausible_tld(domain: str) -> bool:
+    tld = _effective_tld(domain)
+    if not tld or not tld.isalpha():
+        return False
+    if len(tld) == 2:
+        return True
+    return tld in PLAUSIBLE_GTlds
+
+
+def _is_structurally_valid_email(email: str) -> bool:
+    local, _, domain = email.lower().partition("@")
+    if not local or not domain:
+        return False
+    if len(local) > 64 or len(domain) > 253:
+        return False
+    if local.startswith(".") or local.endswith("."):
+        return False
+    if ".." in local or ".." in domain:
+        return False
+
+    labels = domain.split(".")
+    if len(labels) < 2:
+        return False
+    for label in labels:
+        if not label or len(label) > 63:
+            return False
+        if len(label) == 1:
+            if not label.isalnum():
+                return False
+            continue
+        if not DOMAIN_LABEL_RE.match(label):
+            return False
+
+    return _has_plausible_tld(domain)
+
+
 def _is_junk_email(email: str) -> bool:
     lowered = email.lower().strip()
     if not EMAIL_RE.fullmatch(lowered):
         return True
 
     local, _, domain_part = lowered.partition("@")
+    if not _is_structurally_valid_email(lowered):
+        return True
     if domain_part in JUNK_EMAIL_DOMAINS:
         return True
     if any(domain_part.endswith(f".{junk}") for junk in JUNK_EMAIL_DOMAINS):
@@ -241,6 +351,14 @@ def _is_junk_email(email: str) -> bool:
         return True
 
     return False
+
+
+def _is_confident_candidate(candidate: EmailCandidate) -> bool:
+    """True when apply=true may write this candidate without operator review."""
+    if candidate.domain_match:
+        return True
+    path = urlparse(candidate.page_url).path or "/"
+    return _is_contactish_path(path)
 
 
 def _deobfuscate_text(text: str) -> str:
@@ -560,17 +678,29 @@ async def scrape_lead_email_by_id(
 
     if apply and result.candidates:
         top = result.candidates[0]
-        note = f"Scraped candidate from {top.page_url} (not verified — review before send)"
-        update_result = await update_lead(
-            db,
-            lead_id,
-            email=top.email,
-            note=note,
-        )
-        payload["applied"] = update_result.get("updated", False)
-        payload["apply_result"] = update_result
-        if update_result.get("status") == "collision":
-            payload["status"] = "collision"
-            payload["reason"] = update_result.get("reason")
+        if not _is_confident_candidate(top):
+            payload["applied"] = False
+            payload["apply_skipped"] = True
+            payload["apply_result"] = {
+                "updated": False,
+                "reason": (
+                    "no confident candidate — top result is not a domain match "
+                    "and was not found on a contact-ish page"
+                ),
+            }
+            payload["reason"] = payload["apply_result"]["reason"]
+        else:
+            note = f"Scraped candidate from {top.page_url} (not verified — review before send)"
+            update_result = await update_lead(
+                db,
+                lead_id,
+                email=top.email,
+                note=note,
+            )
+            payload["applied"] = update_result.get("updated", False)
+            payload["apply_result"] = update_result
+            if update_result.get("status") == "collision":
+                payload["status"] = "collision"
+                payload["reason"] = update_result.get("reason")
 
     return payload
