@@ -110,3 +110,107 @@ async def test_update_lead_sets_phone(initialized_db: LeadDatabase) -> None:
     reread = await initialized_db.get(lead.id)
     assert reread is not None
     assert reread.contact.phone == "+1-555-0100"
+
+
+@pytest.mark.asyncio
+async def test_update_lead_name_propagates_to_contact_fields(
+    initialized_db: LeadDatabase,
+) -> None:
+    lead = _lead(
+        email="rachel@example.com",
+        name="McHugh Law",
+        full_name="Luann McHugh",
+    )
+    lead.contact.first_name = "Luann"
+    lead.contact.last_name = "McHugh"
+    await initialized_db.upsert(lead)
+
+    result = await update_lead(
+        initialized_db,
+        lead.id,
+        full_name="rachel mchugh",
+    )
+    assert result["updated"] is True
+    assert result["name"] == "Rachel Mchugh"
+    assert result["first_name"] == "Rachel"
+    assert result["last_name"] == "Mchugh"
+    assert result["full_name"] == "Rachel Mchugh"
+
+    reread = await initialized_db.get(lead.id)
+    assert reread is not None
+    assert reread.display_name == "Rachel Mchugh"
+    assert reread.contact.first_name == "Rachel"
+    assert reread.contact.last_name == "Mchugh"
+    assert reread.contact.full_name == "Rachel Mchugh"
+
+
+@pytest.mark.asyncio
+async def test_update_lead_name_greeting_uses_correct_first_name(
+    initialized_db: LeadDatabase,
+    test_config,
+    test_keys,
+) -> None:
+    from leadgen.ai.drafter import OutreachDrafter
+
+    lead = _lead(email="rachel@example.com", name="McHugh Law", full_name="Luann McHugh")
+    lead.contact.first_name = "Luann"
+    lead.contact.last_name = "McHugh"
+    await initialized_db.upsert(lead)
+
+    await update_lead(initialized_db, lead.id, first_name="Rachel")
+
+    reread = await initialized_db.get(lead.id)
+    assert reread is not None
+    test_config.outreach.greeting_format = "Hi {first_name},"
+    test_config.outreach.signature = ""
+    drafter = OutreachDrafter(test_config, test_keys)
+    body = drafter._format_body("Quick note about your firm.", reread)
+    assert body.startswith("Hi Rachel,")
+
+
+@pytest.mark.asyncio
+async def test_update_lead_manual_verify_records_provenance(
+    initialized_db: LeadDatabase,
+) -> None:
+    lead = _lead(
+        email="wendy@wcalvertlaw.com",
+        name="Calvert Law",
+        full_name="Wendy Calvert",
+    )
+    lead.contact.email_verified = False
+    await initialized_db.upsert(lead)
+
+    result = await update_lead(
+        initialized_db,
+        lead.id,
+        email_verified=True,
+        verification_source="manual: published on site",
+    )
+    assert result["updated"] is True
+    assert result["email_verified"] is True
+    assert result["email_verification_source"] == "manual: published on site"
+
+    reread = await initialized_db.get(lead.id)
+    assert reread is not None
+    assert reread.contact.email_verified is True
+    assert reread.contact.email_verification_source == "manual: published on site"
+    assert reread.contact.email == "wendy@wcalvertlaw.com"
+
+
+@pytest.mark.asyncio
+async def test_update_lead_explicit_email_verified_defaults_manual_source(
+    initialized_db: LeadDatabase,
+) -> None:
+    lead = _lead(email=None, name="Acme")
+    await initialized_db.upsert(lead)
+
+    await update_lead(
+        initialized_db,
+        lead.id,
+        email="found@acme.com",
+        email_verified=True,
+    )
+
+    reread = await initialized_db.get(lead.id)
+    assert reread is not None
+    assert reread.contact.email_verification_source == "manual"

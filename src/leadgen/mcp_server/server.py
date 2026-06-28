@@ -291,17 +291,30 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="update_lead",
             description=(
-                "Manually set or correct a lead's contact info (email, domain, phone). "
-                "Use when enrichment pointed at the wrong domain or an operator found "
-                "an email on a company site. Only passed fields are updated. "
-                "Manual emails default to email_verified=false; pass email_verified=true "
-                "to assert deliverability, or verify=true to run Hunter email-verifier "
+                "Manually set or correct a lead's contact info (name, email, domain, phone). "
+                "Use when enrichment pointed at the wrong domain, PDL has the wrong contact name, "
+                "or an operator found an email on a company site. Only passed fields are updated. "
+                "Manual emails default to email_verified=false; pass email_verified=true with "
+                "verification_source (e.g. 'manual: published on site') to assert a published "
+                "address Hunter cannot verify, or verify=true to run Hunter email-verifier "
                 "(not finder) on the address."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "lead_id": {"type": "string"},
+                    "first_name": {
+                        "type": "string",
+                        "description": "Contact first name (title-cased on write)",
+                    },
+                    "last_name": {
+                        "type": "string",
+                        "description": "Contact last name (title-cased on write)",
+                    },
+                    "full_name": {
+                        "type": "string",
+                        "description": "Contact full name (title-cased; splits into first/last)",
+                    },
                     "email": {"type": "string", "description": "Contact email to set"},
                     "domain": {
                         "type": "string",
@@ -311,6 +324,13 @@ async def list_tools() -> list[Tool]:
                     "email_verified": {
                         "type": "boolean",
                         "description": "Mark email as verified (default false when email is set)",
+                    },
+                    "verification_source": {
+                        "type": "string",
+                        "description": (
+                            "Provenance when email_verified=true (default 'manual'). "
+                            "Use e.g. 'manual: published on site' for operator-confirmed addresses."
+                        ),
                     },
                     "verify": {
                         "type": "boolean",
@@ -1022,8 +1042,16 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             kwargs["domain"] = arguments["domain"]
         if "phone" in arguments:
             kwargs["phone"] = arguments["phone"]
+        if "first_name" in arguments:
+            kwargs["first_name"] = arguments["first_name"]
+        if "last_name" in arguments:
+            kwargs["last_name"] = arguments["last_name"]
+        if "full_name" in arguments:
+            kwargs["full_name"] = arguments["full_name"]
         if "email_verified" in arguments:
             kwargs["email_verified"] = arguments["email_verified"]
+        if "verification_source" in arguments:
+            kwargs["verification_source"] = arguments["verification_source"]
         if "status" in arguments:
             kwargs["status"] = arguments["status"]
         if "note" in arguments:

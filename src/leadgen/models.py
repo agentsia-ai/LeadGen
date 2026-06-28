@@ -52,6 +52,7 @@ class ContactInfo(BaseModel):
     title: Optional[str] = None
     email: Optional[str] = None
     email_verified: bool = False
+    email_verification_source: Optional[str] = None
     linkedin_url: Optional[str] = None
     phone: Optional[str] = None
 

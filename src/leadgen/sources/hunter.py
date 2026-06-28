@@ -305,6 +305,7 @@ class HunterConnector:
         if lead.contact.email and not lead.contact.email_verified:
             verified = await self.verify_email(lead.contact.email)
             lead.contact.email_verified = verified
+            lead.contact.email_verification_source = "hunter" if verified else None
             lead.touch()
 
         return lead
