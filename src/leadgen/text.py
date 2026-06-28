@@ -4,6 +4,16 @@ from __future__ import annotations
 
 import re
 
+# Words, apostrophe names (O'Connor), or single-letter initials with a period (J.).
+_NAME_TOKEN_RE = re.compile(
+    r"[a-zA-Z]'[a-zA-Z]+(?:'[a-zA-Z]+)*|[a-zA-Z]\.|[\w']+"
+)
+
+
+def name_tokens(name: str) -> list[str]:
+    """Split a person or company name into casing tokens."""
+    return _NAME_TOKEN_RE.findall(name or "")
+
 
 def title_case_name(name: str, *, preserve_stored_casing: bool = False) -> str:
     """Title-case a name from normalized (often lowercased) lead data.
@@ -21,6 +31,8 @@ def title_case_name(name: str, *, preserve_stored_casing: bool = False) -> str:
     def capitalize_part(part: str) -> str:
         if not part:
             return part
+        if re.fullmatch(r"[a-zA-Z]\.", part):
+            return part[0].upper() + "."
         if "'" in part:
             return "'".join(
                 capitalize_part(p) if p else p for p in part.split("'")

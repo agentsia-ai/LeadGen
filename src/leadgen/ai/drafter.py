@@ -23,7 +23,7 @@ import anthropic
 
 from leadgen.config.loader import APIKeys, LeadGenConfig
 from leadgen.models import Lead, OutreachRecord
-from leadgen.text import title_case_name
+from leadgen.text import name_tokens, title_case_name
 
 logger = logging.getLogger(__name__)
 
@@ -288,7 +288,7 @@ Keep it very short. Add a new angle or value point. Don't be pushy."""
         name = self._display_company_name(lead)
         if not name:
             return text
-        words = re.findall(r"[\w']+", name)
+        words = name_tokens(name)
         if len(words) < 2:
             return text
         pattern = (
@@ -303,7 +303,7 @@ Keep it very short. Add a new angle or value point. Don't be pushy."""
         forms: dict[str, str] = {}
         display = self._display_company_name(lead)
         if display:
-            for word in re.findall(r"[\w']+", display):
+            for word in name_tokens(display):
                 word = word.strip()
                 if len(word) >= 2:
                     key = word.lower()
@@ -325,10 +325,18 @@ Keep it very short. Add a new angle or value point. Don't be pushy."""
             forms[key] = word
         return forms
 
+    @staticmethod
+    def _token_match_pattern(token: str) -> str:
+        """Word-boundary match; initials ending in '.' use non-word edges."""
+        escaped = re.escape(token)
+        if token.endswith("."):
+            return rf"(?<!\w){escaped}(?!\w)"
+        return rf"\b{escaped}\b"
+
     def _apply_token_forms(self, text: str, forms: dict[str, str]) -> str:
         for token_lower, token_proper in forms.items():
             text = re.sub(
-                rf"\b{re.escape(token_lower)}\b",
+                self._token_match_pattern(token_lower),
                 token_proper,
                 text,
                 flags=re.IGNORECASE,
