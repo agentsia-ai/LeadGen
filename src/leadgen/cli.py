@@ -339,6 +339,8 @@ def scrape_email_cmd(ctx, lead_id, domain, apply):
         if apply:
             if result.get("applied"):
                 console.print(f"  Applied top candidate: {result.get('best_email')}")
+            elif result.get("apply_skipped"):
+                console.print(f"[yellow]![/yellow] Apply skipped: {result.get('reason')}")
             elif result.get("status") == "collision":
                 console.print(f"[yellow]![/yellow] {result.get('reason')}")
 

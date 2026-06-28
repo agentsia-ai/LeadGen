@@ -95,6 +95,57 @@ def test_normalize_domain_strips_protocol_and_path() -> None:
     assert normalize_domain("https://www.example.com/about") == "example.com"
 
 
+def test_extract_emails_filters_prose_artifact_tlds() -> None:
+    html = _read_fixture("prose_artifacts.html")
+    emails = extract_emails_from_html(html)
+    assert "de@h.preserve" not in emails
+    assert "expect@ions.wendy" not in emails
+    assert "knowledgeable@torney.the" not in emails
+    assert emails == set()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_scrape_prose_only_site_returns_no_email() -> None:
+    domain = "prosefirm.com"
+    prose = _read_fixture("prose_artifacts.html")
+    _mock_site(respx, domain=domain, homepage_html=prose, page_html={})
+
+    async with ContactEmailScraper() as scraper:
+        result = await scraper.scrape_domain(domain)
+
+    assert result.status == "no_email"
+    assert result.candidates == []
+    assert result.to_dict()["best_email"] is None
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_apply_skips_low_confidence_candidate(initialized_db) -> None:
+    domain = "lowconf.com"
+    lead = _lead(lead_id="lead-lowconf", domain=domain, first_name="Pat", last_name="Lee")
+    await initialized_db.upsert(lead)
+
+    _mock_site(
+        respx,
+        domain=domain,
+        homepage_html=_read_fixture("homepage_gmail_only.html"),
+        page_html={},
+    )
+
+    review = await scrape_lead_email_by_id(initialized_db, lead.id, apply=False)
+    assert review["status"] == "found"
+    assert review["best_email"] == "partner@gmail.com"
+
+    applied = await scrape_lead_email_by_id(initialized_db, lead.id, apply=True)
+    assert applied["applied"] is False
+    assert applied["apply_skipped"] is True
+    assert "no confident candidate" in applied["reason"]
+
+    stored = await initialized_db.get(lead.id)
+    assert stored.contact.email is None
+
+
 def test_extract_emails_from_mailto_link() -> None:
     html = _read_fixture("contact_mailto.html")
     emails = extract_emails_from_html(html)
