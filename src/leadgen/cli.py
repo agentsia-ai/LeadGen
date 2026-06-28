@@ -347,6 +347,9 @@ def scrape_email_cmd(ctx, lead_id, domain, apply):
 
 @main.command("update")
 @click.argument("lead_id")
+@click.option("--first-name", default=None, help="Contact first name (title-cased on write)")
+@click.option("--last-name", default=None, help="Contact last name (title-cased on write)")
+@click.option("--full-name", default=None, help="Contact full name (title-cased; splits into first/last)")
 @click.option("--email", default=None, help="Contact email to set")
 @click.option("--domain", default=None, help="Company domain override")
 @click.option("--phone", default=None, help="Contact phone to set")
@@ -364,8 +367,21 @@ def scrape_email_cmd(ctx, lead_id, domain, apply):
 @click.option("--status", default=None, help="Pipeline status (e.g. enriched)")
 @click.option("--note", default=None, help="Note appended to the lead for provenance")
 @click.pass_context
-def update_lead_cmd(ctx, lead_id, email, domain, phone, email_verified, verify, status, note):
-    """Manually set or correct a lead's contact info (email, domain, phone)."""
+def update_lead_cmd(
+    ctx,
+    lead_id,
+    first_name,
+    last_name,
+    full_name,
+    email,
+    domain,
+    phone,
+    email_verified,
+    verify,
+    status,
+    note,
+):
+    """Manually set or correct a lead's contact info (name, email, domain, phone)."""
     async def _run():
         from leadgen.config.loader import load_config, load_api_keys
         from leadgen.crm.database import LeadDatabase
@@ -378,6 +394,12 @@ def update_lead_cmd(ctx, lead_id, email, domain, phone, email_verified, verify, 
         await db.init()
 
         kwargs: dict = {}
+        if first_name is not None:
+            kwargs["first_name"] = first_name
+        if last_name is not None:
+            kwargs["last_name"] = last_name
+        if full_name is not None:
+            kwargs["full_name"] = full_name
         if email is not None:
             kwargs["email"] = email
         if domain is not None:
@@ -413,6 +435,8 @@ def update_lead_cmd(ctx, lead_id, email, domain, phone, email_verified, verify, 
             f"[green]OK[/green] Updated {result.get('name', lead_id)} "
             f"({', '.join(result.get('updated_fields', []))})"
         )
+        if any(f in result.get("updated_fields", []) for f in ("first_name", "last_name", "full_name")):
+            console.print(f"  name: {result.get('name') or '-'}")
         console.print(f"  email: {result.get('email') or '-'}")
         console.print(f"  email_verified: {result.get('email_verified')}")
         console.print(f"  domain: {result.get('domain') or '-'}")
