@@ -62,6 +62,33 @@ def test_normalize_subject_title_cases_lowercased_company_name(
     )
 
 
+def test_normalize_subject_capitalizes_single_letter_initials_in_company_name(
+    test_config, test_keys, sample_lead
+) -> None:
+    """Single-letter initials with a period must title-case in deterministic fallback."""
+    test_config.outreach.subject_casing = "sentence"
+    sample_lead.company.name = "law offices of j. jeltes, ltd."
+    sample_lead.company.display_name = None
+    d = OutreachDrafter(test_config, test_keys)
+    result = d._normalize_subject(
+        "law offices of j. jeltes admin hours back", sample_lead
+    )
+    assert "J. Jeltes" in result
+    assert "j. Jeltes" not in result
+
+
+def test_normalize_subject_capitalizes_multiple_single_letter_initials(
+    test_config, test_keys, sample_lead
+) -> None:
+    test_config.outreach.subject_casing = "sentence"
+    sample_lead.company.name = "j. r. smith consulting"
+    sample_lead.company.display_name = None
+    d = OutreachDrafter(test_config, test_keys)
+    result = d._normalize_subject("j. r. smith consulting admin time", sample_lead)
+    assert "J. R. Smith" in result
+    assert "j. r. Smith" not in result
+
+
 def test_body_title_cases_lowercased_company_name(test_config, test_keys, sample_lead) -> None:
     """Full company phrase in body must use display casing from the lead record."""
     sample_lead.company.name = "matrix realty group"
