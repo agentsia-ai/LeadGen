@@ -157,6 +157,38 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="scrape_lead_email",
+            description=(
+                "Scrape publicly published contact emails from a lead's own website "
+                "(homepage + contact/about/appointments subpages). Use as a fallback "
+                "after enrich_lead (Hunter) misses — Hunter first, scraper second. "
+                "Returns candidate emails with page provenance; does NOT auto-verify. "
+                "Pass apply=true to write the top candidate as an unverified email "
+                "(operator review still required before send). Requires lead_id."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "lead_id": {
+                        "type": "string",
+                        "description": "Lead to scrape (required — one explicit target per call)",
+                    },
+                    "domain": {
+                        "type": "string",
+                        "description": "Optional domain override (e.g. wcalvertlaw.com)",
+                    },
+                    "apply": {
+                        "type": "boolean",
+                        "description": (
+                            "If true, write the top-ranked candidate to the lead as "
+                            "email_verified=false with a scrape provenance note. Default false."
+                        ),
+                    },
+                },
+                "required": ["lead_id"],
+            },
+        ),
+        Tool(
             name="score_leads",
             description=(
                 "Run AI scoring on leads against your ICP. Pass lead_id or lead_ids "
@@ -681,6 +713,23 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             "processed": len(results),
             "results": results,
         }, indent=2))]
+
+    elif name == "scrape_lead_email":
+        lead_id = arguments.get("lead_id")
+        if not lead_id:
+            return _json({
+                "error": "lead_id is required — one explicit target per call",
+            })
+
+        from leadgen.sources.email_scraper import scrape_lead_email_by_id
+
+        result = await scrape_lead_email_by_id(
+            db,
+            lead_id,
+            domain=arguments.get("domain"),
+            apply=arguments.get("apply", False),
+        )
+        return _json(result)
 
     elif name == "score_leads":
         limit = arguments.get("limit", 20)
