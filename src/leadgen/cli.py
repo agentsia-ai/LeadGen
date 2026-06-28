@@ -288,6 +288,63 @@ def enrich(ctx, limit):
     asyncio.run(_run())
 
 
+@main.command("scrape-email")
+@click.argument("lead_id")
+@click.option("--domain", default=None, help="Override company domain to scrape")
+@click.option(
+    "--apply",
+    is_flag=True,
+    default=False,
+    help="Write top candidate to the lead as unverified (default: candidates only)",
+)
+@click.pass_context
+def scrape_email_cmd(ctx, lead_id, domain, apply):
+    """Scrape published contact emails from a lead's website (Hunter fallback)."""
+    async def _run():
+        from leadgen.config.loader import load_config
+        from leadgen.crm.database import LeadDatabase
+        from leadgen.sources.email_scraper import scrape_lead_email_by_id
+
+        cfg = load_config(ctx.obj.get("config_path"))
+        db = LeadDatabase(cfg.database.sqlite_path)
+        await db.init()
+
+        result = await scrape_lead_email_by_id(
+            db, lead_id, domain=domain, apply=apply
+        )
+
+        if result.get("error"):
+            console.print(f"[red]X[/red] {result['error']}")
+            return
+        if result.get("status") == "suppressed":
+            console.print(f"[yellow]![/yellow] Lead suppressed: {result.get('reason')}")
+            return
+
+        console.print(
+            f"[green]OK[/green] Scrape for {result.get('name', lead_id)} "
+            f"({result.get('domain', '-')}) — status: {result.get('status')}"
+        )
+        candidates = result.get("candidates") or []
+        if not candidates:
+            console.print(f"  {result.get('reason', 'No emails found')}")
+            return
+
+        for candidate in candidates:
+            match = "domain-match" if candidate.get("domain_match") else "other-domain"
+            role = "role inbox" if candidate.get("is_role_inbox") else "named inbox"
+            console.print(
+                f"  {candidate['email']}  ({match}, {role})  "
+                f"from {candidate['page_url']}"
+            )
+        if apply:
+            if result.get("applied"):
+                console.print(f"  Applied top candidate: {result.get('best_email')}")
+            elif result.get("status") == "collision":
+                console.print(f"[yellow]![/yellow] {result.get('reason')}")
+
+    asyncio.run(_run())
+
+
 @main.command("update")
 @click.argument("lead_id")
 @click.option("--email", default=None, help="Contact email to set")
