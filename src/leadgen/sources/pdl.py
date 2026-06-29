@@ -16,6 +16,7 @@ from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wai
 from leadgen.config.loader import APIKeys, LeadGenConfig
 from leadgen.models import CompanyInfo, ContactInfo, Lead, LeadSource, split_company_names
 from leadgen.sources.pdl_industries import BROADER_THAN_LABEL, validate_and_resolve
+from leadgen.text import normalize_company_display_name
 
 logger = logging.getLogger(__name__)
 
@@ -527,4 +528,4 @@ class PDLConnector:
             return
         display = await self._fetch_company_display_name(company_id)
         if display:
-            lead.company.display_name = display
+            lead.company.display_name = normalize_company_display_name(display)

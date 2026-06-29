@@ -13,6 +13,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field, field_validator
 
 from leadgen._time import now_utc
+from leadgen.text import normalize_company_display_name
 
 
 class LeadStatus(str, Enum):
@@ -72,9 +73,9 @@ def split_company_names(
     match_key = raw.lower()
     disp = (display or raw).strip()
     if display:
-        return match_key, disp
+        return match_key, normalize_company_display_name(disp)
     if disp != match_key:
-        return match_key, disp
+        return match_key, normalize_company_display_name(disp)
     return match_key, None
 
 

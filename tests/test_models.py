@@ -123,6 +123,29 @@ def test_split_company_names_explicit_display() -> None:
     assert display == "CORFAC International"
 
 
+def test_split_company_names_normalizes_all_caps_common_words() -> None:
+    match_key, display = split_company_names(
+        "protect realty", display="PROTECT REALTY"
+    )
+    assert match_key == "protect realty"
+    assert display == "Protect Realty"
+
+
+def test_split_company_names_preserves_acronym_and_intercap_display() -> None:
+    _, gtps = split_company_names(
+        "gtps insurance agency", display="GTPS INSURANCE AGENCY"
+    )
+    assert gtps == "GTPS Insurance Agency"
+
+    _, lucky = split_company_names("luckytruck", display="LuckyTruck")
+    assert lucky == "LuckyTruck"
+
+    _, mchugh = split_company_names(
+        "mchugh realty group", display="McHugh Realty Group"
+    )
+    assert mchugh == "McHugh Realty Group"
+
+
 def test_lead_default_status_is_new() -> None:
     """Every freshly constructed Lead must start at NEW — downstream status
     transitions depend on this invariant."""

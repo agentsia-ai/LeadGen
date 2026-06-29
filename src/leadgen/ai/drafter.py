@@ -23,7 +23,12 @@ import anthropic
 
 from leadgen.config.loader import APIKeys, LeadGenConfig
 from leadgen.models import Lead, OutreachRecord
-from leadgen.text import name_tokens, title_case_name
+from leadgen.text import (
+    looks_like_acronym,
+    name_tokens,
+    normalize_company_display_name,
+    title_case_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -188,7 +193,7 @@ Keep it very short. Add a new angle or value point. Don't be pushy."""
     def _display_company_name(self, lead: Lead) -> str:
         """Company name for interpolation — display_name when stored, else title-case fallback."""
         if (lead.company.display_name or "").strip():
-            return lead.company.display_name.strip()
+            return normalize_company_display_name(lead.company.display_name.strip())
         return self._title_case_name(
             lead.company.name or "", preserve_stored_casing=True
         )
@@ -314,16 +319,7 @@ Keep it very short. Add a new angle or value point. Don't be pushy."""
     @staticmethod
     def _looks_like_acronym(word: str) -> bool:
         """True for short or non-word all-caps tokens (GTPS, ACME, B2B), not common words."""
-        letters = [c for c in word if c.isalpha()]
-        if len(letters) < 2:
-            return False
-        if any(c.isdigit() for c in word):
-            return True
-        if len(letters) <= 4:
-            return True
-        if not any(c.lower() in "aeiou" for c in letters):
-            return True
-        return False
+        return looks_like_acronym(word)
 
     def _acronym_forms_from_subject(self, subject: str, lead: Lead) -> dict[str, str]:
         """All-caps acronym tokens from the model (ACME, B2B) — not names or common words."""

@@ -702,6 +702,48 @@ async def test_pdl_search_attaches_company_display_name(test_config, test_keys) 
     assert leads[0].company.display_name == "LuckyTruck"
 
 
+@pytest.mark.asyncio
+@respx.mock
+async def test_pdl_search_normalizes_all_caps_company_display_name(
+    test_config, test_keys
+) -> None:
+    respx.get("https://api.peopledatalabs.com/v5/person/search").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "first_name": "Tim",
+                        "last_name": "Hart",
+                        "full_name": "Tim Hart",
+                        "job_title": "Broker",
+                        "work_email": "tim@protectrealty.com",
+                        "job_company_name": "protect realty",
+                        "job_company_id": "pdl-protect-realty",
+                        "job_company_website": "protectrealty.com",
+                        "job_company_industry": "real estate",
+                        "job_company_employee_count": 5,
+                        "job_company_location_country": "united_states",
+                    }
+                ],
+                "scroll_token": None,
+            },
+        )
+    )
+    respx.get("https://api.peopledatalabs.com/v5/company/enrich").mock(
+        return_value=httpx.Response(
+            200,
+            json={"display_name": "PROTECT REALTY", "name": "protect realty"},
+        )
+    )
+
+    async with PDLConnector(test_config, test_keys) as p:
+        leads = await p.search(limit=1)
+
+    assert len(leads) == 1
+    assert leads[0].company.display_name == "Protect Realty"
+
+
 def test_pdl_normalizes_boolean_email_to_none(test_config, test_keys) -> None:
     """On the free tier PDL returns `True` (bool) in the email slot to
     signal 'an email exists but we won't tell you' — parser must convert

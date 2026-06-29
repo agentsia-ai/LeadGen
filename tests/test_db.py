@@ -435,3 +435,19 @@ async def test_init_is_idempotent(tmp_db_path: str) -> None:
         ) as cur:
             row = await cur.fetchone()
     assert row is not None and row[0] == "leads"
+
+
+@pytest.mark.asyncio
+async def test_backfill_company_display_names_fixes_all_caps(initialized_db: LeadDatabase) -> None:
+    lead = _lead(email="tim@protectrealty.com", name="protect realty", full_name="Tim Hart")
+    lead.company.display_name = "PROTECT REALTY"
+    await initialized_db.upsert(lead)
+
+    updated = await initialized_db.backfill_company_display_names()
+    assert updated == 1
+
+    reread = await initialized_db.get(lead.id)
+    assert reread is not None
+    assert reread.company.display_name == "Protect Realty"
+
+    assert await initialized_db.backfill_company_display_names() == 0

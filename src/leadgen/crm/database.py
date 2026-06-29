@@ -15,6 +15,7 @@ import aiosqlite
 
 from leadgen._time import now_utc, parse_iso
 from leadgen.models import Lead, LeadStatus
+from leadgen.text import normalize_company_display_name
 
 logger = logging.getLogger(__name__)
 
@@ -208,6 +209,30 @@ class LeadDatabase:
             )
             await db.commit()
             return cur.rowcount > 0
+
+    async def backfill_company_display_names(self) -> int:
+        """Repair stored all-caps multi-word company display_name values."""
+        updated = 0
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute("SELECT id, company_json FROM leads") as cur:
+                rows = await cur.fetchall()
+            for lead_id, company_json in rows:
+                company = json.loads(company_json)
+                display = company.get("display_name")
+                if not display:
+                    continue
+                fixed = normalize_company_display_name(display)
+                if fixed == display:
+                    continue
+                company["display_name"] = fixed
+                await db.execute(
+                    "UPDATE leads SET company_json = ?, updated_at = ? WHERE id = ?",
+                    (json.dumps(company), now_utc().isoformat(), lead_id),
+                )
+                updated += 1
+            if updated:
+                await db.commit()
+        return updated
 
     async def _backfill_suppressions(self) -> None:
         """Seed suppressions from existing terminal-status leads (idempotent)."""
