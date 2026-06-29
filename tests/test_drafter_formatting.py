@@ -231,7 +231,32 @@ def test_title_case_name_handles_hyphen_and_apostrophe(test_config, test_keys) -
     d = OutreachDrafter(test_config, test_keys)
     assert d._title_case_name("jean-pierre") == "Jean-Pierre"
     assert d._title_case_name("o'connor") == "O'Connor"
+    assert d._title_case_name("o'brien") == "O'Brien"
     assert d._title_case_name("mary jane") == "Mary Jane"
+
+
+def test_title_case_name_handles_mc_and_mac_prefixes(test_config, test_keys) -> None:
+    d = OutreachDrafter(test_config, test_keys)
+    assert d._title_case_name("mchugh") == "McHugh"
+    assert d._title_case_name("macdonald") == "MacDonald"
+    assert d._title_case_name("smith") == "Smith"
+    assert d._title_case_name("McHugh") == "McHugh"
+    assert d._title_case_name("Mchugh") == "McHugh"
+
+
+def test_subject_renders_mchugh_realty_with_intercap_last_name(
+    test_config, test_keys, sample_lead
+) -> None:
+    test_config.outreach.subject_casing = "sentence"
+    sample_lead.contact.first_name = "Rachel"
+    sample_lead.contact.last_name = "McHugh"
+    sample_lead.contact.full_name = "Rachel McHugh"
+    sample_lead.company.name = "mchugh realty group"
+    sample_lead.company.display_name = "McHugh Realty Group"
+    d = OutreachDrafter(test_config, test_keys)
+    assert d._normalize_subject("mchugh realty group admin hours back", sample_lead) == (
+        "McHugh Realty Group admin hours back"
+    )
 
 
 def test_body_restores_title_cased_prospect_name(test_config, test_keys, sample_lead) -> None:
