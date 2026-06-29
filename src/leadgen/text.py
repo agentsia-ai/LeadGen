@@ -45,6 +45,49 @@ def _repair_naive_mc_casing(name: str) -> str:
     return name
 
 
+def looks_like_acronym(word: str) -> bool:
+    """True for short or non-word all-caps tokens (GTPS, ACME, B2B), not common words."""
+    letters = [c for c in word if c.isalpha()]
+    if len(letters) < 2:
+        return False
+    if any(c.isdigit() for c in word):
+        return True
+    if len(letters) <= 4:
+        return True
+    if not any(c.lower() in "aeiou" for c in letters):
+        return True
+    return False
+
+
+def normalize_company_display_name(name: str) -> str:
+    """Fix all-caps multi-word company names from noisy sources (e.g. PDL enrich).
+
+    Preserves operator/source mixed case (LuckyTruck, McHugh, CORFAC International)
+    and short acronym tokens (GTPS). Only repairs shouting common words such as
+    PROTECT REALTY -> Protect Realty.
+    """
+    name = (name or "").strip()
+    if not name:
+        return name
+
+    if _has_mixed_case(name):
+        return name
+
+    tokens = name_tokens(name)
+    if len(tokens) < 2 or name != name.upper():
+        return name
+
+    pieces: list[str] = []
+    for segment in re.split(r"(\s+|-)", name):
+        if not segment or segment.isspace() or segment == "-":
+            pieces.append(segment)
+        elif looks_like_acronym(segment):
+            pieces.append(segment)
+        else:
+            pieces.append(_capitalize_name_part(segment.lower()))
+    return "".join(pieces)
+
+
 def title_case_name(name: str, *, preserve_stored_casing: bool = False) -> str:
     """Title-case a name from normalized (often lowercased) lead data.
 

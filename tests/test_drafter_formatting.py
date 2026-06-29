@@ -181,6 +181,41 @@ def test_display_company_name_uses_display_name_when_set(test_config, test_keys,
     assert d._display_company_name(sample_lead) == "CORFAC International"
 
 
+def test_display_company_name_safety_net_fixes_stored_all_caps_common_words(
+    test_config, test_keys, sample_lead
+) -> None:
+    sample_lead.company.name = "protect realty"
+    sample_lead.company.display_name = "PROTECT REALTY"
+    d = OutreachDrafter(test_config, test_keys)
+    assert d._display_company_name(sample_lead) == "Protect Realty"
+
+
+def test_display_company_name_safety_net_preserves_acronyms_and_intercap(
+    test_config, test_keys, sample_lead
+) -> None:
+    d = OutreachDrafter(test_config, test_keys)
+
+    sample_lead.company.name = "gtps insurance agency"
+    sample_lead.company.display_name = "GTPS Insurance Agency"
+    assert d._display_company_name(sample_lead) == "GTPS Insurance Agency"
+
+    sample_lead.company.name = "luckytruck"
+    sample_lead.company.display_name = "LuckyTruck"
+    assert d._display_company_name(sample_lead) == "LuckyTruck"
+
+
+def test_subject_renders_stored_all_caps_protect_realty_via_safety_net(
+    test_config, test_keys, sample_lead
+) -> None:
+    test_config.outreach.subject_casing = "sentence"
+    sample_lead.company.name = "protect realty"
+    sample_lead.company.display_name = "PROTECT REALTY"
+    d = OutreachDrafter(test_config, test_keys)
+    assert d._normalize_subject("PROTECT REALTY admin hours back", sample_lead) == (
+        "Protect Realty admin hours back"
+    )
+
+
 def test_subject_renders_corfac_with_source_casing(test_config, test_keys, sample_lead) -> None:
     test_config.outreach.subject_casing = "sentence"
     sample_lead.company.name = "corfac international"

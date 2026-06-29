@@ -923,6 +923,28 @@ def smtp_test(ctx):
     asyncio.run(_run())
 
 
+@main.command("backfill-display-names")
+@click.pass_context
+def backfill_display_names(ctx):
+    """Repair stored all-caps company display_name values (e.g. PROTECT REALTY)."""
+    async def _run():
+        from leadgen.config.loader import load_config
+        from leadgen.crm.database import LeadDatabase
+
+        cfg = load_config(ctx.obj.get("config_path"))
+        db = LeadDatabase(cfg.database.sqlite_path)
+        await db.init()
+        updated = await db.backfill_company_display_names()
+        if updated:
+            console.print(
+                f"[green]OK[/green] Fixed company display_name on {updated} lead(s)."
+            )
+        else:
+            console.print("[green]OK[/green] No all-caps company display names to fix.")
+
+    asyncio.run(_run())
+
+
 @main.command()
 @click.pass_context
 def mcp(ctx):
