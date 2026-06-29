@@ -311,13 +311,29 @@ Keep it very short. Add a new angle or value point. Don't be pushy."""
                         forms[key] = word
         return forms
 
+    @staticmethod
+    def _looks_like_acronym(word: str) -> bool:
+        """True for short or non-word all-caps tokens (GTPS, ACME, B2B), not common words."""
+        letters = [c for c in word if c.isalpha()]
+        if len(letters) < 2:
+            return False
+        if any(c.isdigit() for c in word):
+            return True
+        if len(letters) <= 4:
+            return True
+        if not any(c.lower() in "aeiou" for c in letters):
+            return True
+        return False
+
     def _acronym_forms_from_subject(self, subject: str, lead: Lead) -> dict[str, str]:
-        """All-caps tokens from the model (ACME, B2B) — not person names like JANE."""
+        """All-caps acronym tokens from the model (ACME, B2B) — not names or common words."""
         person_keys = set(self._person_name_forms(lead).keys())
         forms: dict[str, str] = {}
         for word in re.findall(r"[\w']+", subject):
             letters = [c for c in word if c.isalpha()]
             if len(letters) < 2 or not all(c.isupper() for c in letters):
+                continue
+            if not self._looks_like_acronym(word):
                 continue
             key = word.lower()
             if key in person_keys or key in forms:

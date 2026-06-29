@@ -62,6 +62,46 @@ def test_normalize_subject_title_cases_lowercased_company_name(
     )
 
 
+def test_normalize_subject_downcases_model_shouted_common_company_words(
+    test_config, test_keys, sample_lead
+) -> None:
+    """Model all-caps common words must not survive acronym preservation."""
+    test_config.outreach.subject_casing = "sentence"
+    sample_lead.company.name = "protect realty"
+    sample_lead.company.display_name = None
+    d = OutreachDrafter(test_config, test_keys)
+    assert d._normalize_subject("PROTECT REALTY admin hours back", sample_lead) == (
+        "Protect Realty admin hours back"
+    )
+
+
+def test_normalize_subject_casing_regression_guards(
+    test_config, test_keys, sample_lead
+) -> None:
+    """Acronym, intercap, and single-letter-initial casing must stay intact together."""
+    test_config.outreach.subject_casing = "sentence"
+    d = OutreachDrafter(test_config, test_keys)
+
+    sample_lead.company.name = "gtps insurance agency"
+    sample_lead.company.display_name = "GTPS Insurance Agency"
+    assert d._normalize_subject("GTPS insurance agency admin hours back", sample_lead) == (
+        "GTPS Insurance Agency admin hours back"
+    )
+
+    sample_lead.company.name = "mchugh realty group"
+    sample_lead.company.display_name = "McHugh Realty Group"
+    assert d._normalize_subject("MCHUGH REALTY GROUP admin hours back", sample_lead) == (
+        "McHugh Realty Group admin hours back"
+    )
+
+    sample_lead.company.name = "law offices of j. jeltes, ltd."
+    sample_lead.company.display_name = None
+    result = d._normalize_subject("LAW OFFICES OF J. JELTES admin hours back", sample_lead)
+    assert "J. Jeltes" in result
+    assert "J. jeltes" not in result
+    assert "LAW OFFICES" not in result
+
+
 def test_normalize_subject_capitalizes_single_letter_initials_in_company_name(
     test_config, test_keys, sample_lead
 ) -> None:
