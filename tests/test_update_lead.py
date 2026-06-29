@@ -131,17 +131,43 @@ async def test_update_lead_name_propagates_to_contact_fields(
         full_name="rachel mchugh",
     )
     assert result["updated"] is True
-    assert result["name"] == "Rachel Mchugh"
-    assert result["first_name"] == "Rachel"
-    assert result["last_name"] == "Mchugh"
-    assert result["full_name"] == "Rachel Mchugh"
+    assert result["name"] == "rachel mchugh"
+    assert result["first_name"] == "rachel"
+    assert result["last_name"] == "mchugh"
+    assert result["full_name"] == "rachel mchugh"
 
     reread = await initialized_db.get(lead.id)
     assert reread is not None
-    assert reread.display_name == "Rachel Mchugh"
-    assert reread.contact.first_name == "Rachel"
-    assert reread.contact.last_name == "Mchugh"
-    assert reread.contact.full_name == "Rachel Mchugh"
+    assert reread.display_name == "rachel mchugh"
+    assert reread.contact.first_name == "rachel"
+    assert reread.contact.last_name == "mchugh"
+    assert reread.contact.full_name == "rachel mchugh"
+
+
+@pytest.mark.asyncio
+async def test_update_lead_preserves_operator_intercap_last_name(
+    initialized_db: LeadDatabase,
+) -> None:
+    lead = _lead(email="rachel@example.com", name="McHugh Law", full_name="Luann McHugh")
+    lead.contact.first_name = "Luann"
+    lead.contact.last_name = "McHugh"
+    await initialized_db.upsert(lead)
+
+    result = await update_lead(
+        initialized_db,
+        lead.id,
+        first_name="Rachel",
+        last_name="McHugh",
+    )
+    assert result["updated"] is True
+    assert result["last_name"] == "McHugh"
+    assert result["full_name"] == "Rachel McHugh"
+
+    reread = await initialized_db.get(lead.id)
+    assert reread is not None
+    assert reread.contact.last_name == "McHugh"
+    assert reread.contact.full_name == "Rachel McHugh"
+    assert reread.display_name == "Rachel McHugh"
 
 
 @pytest.mark.asyncio

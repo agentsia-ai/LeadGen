@@ -64,10 +64,10 @@ async def test_mcp_update_lead_sets_contact_json_name(mcp_env) -> None:
     update_payload = json.loads(update_result[0].text)
 
     assert update_payload["updated"] is True
-    assert update_payload["name"] == "Rachel Mchugh"
+    assert update_payload["name"] == "Rachel McHugh"
     assert update_payload["first_name"] == "Rachel"
-    assert update_payload["last_name"] == "Mchugh"
-    assert update_payload["full_name"] == "Rachel Mchugh"
+    assert update_payload["last_name"] == "McHugh"
+    assert update_payload["full_name"] == "Rachel McHugh"
     assert "first_name" in update_payload["updated_fields"]
     assert "last_name" in update_payload["updated_fields"]
     assert "full_name" in update_payload["updated_fields"]
@@ -75,9 +75,9 @@ async def test_mcp_update_lead_sets_contact_json_name(mcp_env) -> None:
     reread = await mcp_env.get(lead.id)
     assert reread is not None
     assert reread.contact.first_name == "Rachel"
-    assert reread.contact.last_name == "Mchugh"
-    assert reread.contact.full_name == "Rachel Mchugh"
-    assert reread.display_name == "Rachel Mchugh"
+    assert reread.contact.last_name == "McHugh"
+    assert reread.contact.full_name == "Rachel McHugh"
+    assert reread.display_name == "Rachel McHugh"
 
     detail_result = await mcp_server.call_tool(
         "get_lead_detail",
@@ -85,7 +85,7 @@ async def test_mcp_update_lead_sets_contact_json_name(mcp_env) -> None:
     )
     detail_payload = json.loads(detail_result[0].text)
 
-    assert detail_payload["name"] == "Rachel Mchugh"
+    assert detail_payload["name"] == "Rachel McHugh"
 
 
 @pytest.mark.asyncio
