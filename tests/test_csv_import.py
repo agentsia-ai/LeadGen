@@ -39,8 +39,14 @@ async def test_import_file_parses_basic_columns(
     assert leads[0].source == LeadSource.CSV_IMPORT
     assert leads[0].contact.email == "jane@acme.com"
     assert leads[0].contact.full_name == "Jane Smith"
-    assert leads[0].company.name == "Acme Corp"
     assert leads[0].company.domain == "acme.com"
+    # `name` is the lowercase dedup match key; source casing is preserved
+    # separately in `display_name` (see models.split_company_names). Assert
+    # BOTH so a regression that folds them back together is caught here.
+    assert leads[0].company.name == "acme corp"
+    assert leads[0].company.display_name == "Acme Corp"
+    assert leads[1].company.name == "beta inc"
+    assert leads[1].company.display_name == "Beta Inc"
 
 
 @pytest.mark.asyncio
@@ -64,7 +70,10 @@ async def test_import_file_handles_header_aliases(
     assert lead.contact.last_name == "Li"
     assert lead.contact.email == "alex@corp.com"
     assert lead.contact.title == "Head of Sales"
-    assert lead.company.name == "CorpCo"
+    # Intercap company casing must survive import intact on display_name
+    # while the match key lowercases for dedup.
+    assert lead.company.name == "corpco"
+    assert lead.company.display_name == "CorpCo"
     # Website → domain derivation strips scheme and path
     assert lead.company.domain == "corp.com"
 
@@ -89,13 +98,13 @@ async def test_import_file_skips_rows_with_no_email_and_no_company(
     conn = CSVImportConnector(test_config, test_keys)
     leads = await conn.import_file(csv_path)
 
-    emails_or_companies = [
-        (l.contact.email, l.company.name) for l in leads
+    parsed = [
+        (l.contact.email, l.company.name, l.company.display_name) for l in leads
     ]
-    assert len(leads) == 3, f"Expected 3 parsed rows, got {emails_or_companies}"
-    assert ("good@x.com", "CompanyA") in emails_or_companies
-    assert any(c == "CompanyB" for _, c in emails_or_companies)
-    assert any(e == "has@email.com" for e, _ in emails_or_companies)
+    assert len(leads) == 3, f"Expected 3 parsed rows, got {parsed}"
+    assert ("good@x.com", "companya", "CompanyA") in parsed
+    assert any(key == "companyb" and disp == "CompanyB" for _, key, disp in parsed)
+    assert any(e == "has@email.com" for e, _, _ in parsed)
 
 
 @pytest.mark.asyncio

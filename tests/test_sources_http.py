@@ -449,24 +449,28 @@ async def test_pdl_relax_industry_opt_in_drops_filter_and_flags(
     # Relaxed leads must be flagged so they aren't treated as on-vertical.
     assert leads[0].industry_relaxed is True
 
-    # First request carried an exact industry clause (term/terms on the
-    # canonical PDL field); the post-404 retry dropped it entirely.
-    first_clause_kinds = [
-        next(iter(c.keys())) for c in queries[0]["bool"]["must"]
-    ]
-    second_clause_field_names = [
-        next(iter(next(iter(c.values())).keys()))
-        for c in queries[1]["bool"]["must"]
-    ]
-    assert any(k in first_clause_kinds for k in ("term", "terms", "bool"))
-    assert any(
-        "job_company_industry" in f
-        for c in queries[0]["bool"]["must"]
-        for f in [next(iter(next(iter(c.values())).keys()))]
-    )
-    assert not any(
-        "job_company_industry" in f for f in second_clause_field_names
-    )
+    # First request carried an exact industry clause; the post-404 retry
+    # dropped it entirely.
+    #
+    # A multi-industry ICP emits a nested bool.should of `term` clauses, NOT a
+    # flat `terms[]` array — PDL rejects the terms[] shape on
+    # job_company_industry. Pin that exact shape rather than scanning loosely:
+    # the nesting depth IS the contract, and a silent revert to terms[] would
+    # start 400-ing in production.
+    industry_clause = {
+        "bool": {
+            "should": [
+                {"term": {"job_company_industry": "computer software"}},
+                {"term": {"job_company_industry": "financial services"}},
+            ],
+        }
+    }
+    assert industry_clause in queries[0]["bool"]["must"]
+    # PDL forbids minimum_should_match; a should-only bool implicitly needs >=1.
+    assert "minimum_should_match" not in industry_clause["bool"]
+
+    # The relaxed retry must not reference the industry field at ANY depth.
+    assert "job_company_industry" not in _json.dumps(queries[1])
 
 
 @pytest.mark.asyncio
