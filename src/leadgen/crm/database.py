@@ -13,7 +13,13 @@ from pathlib import Path
 
 import aiosqlite
 
-from leadgen._time import now_utc, parse_iso
+from leadgen._time import now_utc
+from leadgen.crm._shared import (
+    LeadIdentityMixin,
+    lead_from_row,
+    lead_insert_values,
+    lead_update_values,
+)
 from leadgen.models import Lead, LeadStatus
 from leadgen.text import normalize_company_display_name
 
@@ -36,8 +42,13 @@ class EmailCollisionError(Exception):
         super().__init__(f"email {email!r} already on lead {existing_lead_id}")
 
 
-class LeadDatabase:
-    """Simple async SQLite-backed lead store."""
+class LeadDatabase(LeadIdentityMixin):
+    """Simple async SQLite-backed lead store.
+
+    The default backend, and the only one used by local dev and the Claude
+    Desktop stdio path. See :mod:`leadgen.crm.d1` for the remote-Worker
+    backend and ``leadgen.crm.factory.create_database`` for the switch.
+    """
 
     def __init__(self, db_path: str = "./data/leadgen.db"):
         self.db_path = db_path
@@ -91,45 +102,6 @@ class LeadDatabase:
         await self._backfill_suppressions()
         logger.info(f"Database initialized: {self.db_path}")
 
-    @staticmethod
-    def _name_company_key(contact: dict, company: dict) -> str | None:
-        """Email-INDEPENDENT identity key: person name + company.
-
-        Deliberately ignores email so the *same person at the same company*
-        collapses to one row regardless of whether the incoming email is
-        null. PDL's free tier returns null emails, so an email-bearing key
-        let an already-known (enriched) person look brand-new when PDL
-        re-returned them with ``email=None`` — stacking duplicate rows and
-        wasting PDL/Hunter credits re-fetching someone we already had.
-
-        Returns None unless BOTH a person name and a company name are
-        present: matching on company alone would wrongly merge different
-        people at the same firm, and matching on name alone would merge
-        namesakes across companies.
-
-        Shared by `upsert` (insert-time dedupe) and `find_duplicates` /
-        `delete_duplicates` (cleanup) so prevention and cure use exactly the
-        same notion of identity.
-        """
-        first = contact.get("first_name") or ""
-        last = contact.get("last_name") or ""
-        full_name = (contact.get("full_name") or f"{first} {last}").strip()
-        company_name = (company.get("name") or "").strip()
-        if not full_name or not company_name:
-            return None
-        return f"name:{full_name.lower()}|company:{company_name.lower()}"
-
-    @staticmethod
-    def domain_suppression_key(domain: str) -> str:
-        """Suppression key for an entire company domain."""
-        return f"domain:{domain.lower().strip()}"
-
-    def identity_key_from_lead(self, lead: Lead) -> str | None:
-        """Email-independent identity key for a Lead model instance."""
-        return self._name_company_key(
-            lead.contact.model_dump(), lead.company.model_dump()
-        )
-
     async def add_suppression(
         self,
         suppression_key: str,
@@ -173,21 +145,6 @@ class LeadDatabase:
                 if row:
                     return True, row[0]
                 return False, None
-
-    async def check_lead_suppressed(self, lead: Lead) -> tuple[bool, str | None]:
-        """Check name+company identity and company domain against suppressions."""
-        identity_key = self.identity_key_from_lead(lead)
-        if identity_key:
-            suppressed, reason = await self.is_suppression_key(identity_key)
-            if suppressed:
-                return True, reason
-        if lead.company.domain:
-            suppressed, reason = await self.is_suppression_key(
-                self.domain_suppression_key(lead.company.domain)
-            )
-            if suppressed:
-                return True, reason
-        return False, None
 
     async def list_suppressions(self, limit: int = 100) -> list[dict]:
         """Return suppression records for operator review."""
@@ -353,24 +310,6 @@ class LeadDatabase:
             else:
                 target = lead
 
-            row = (
-                target.id,
-                target.source.value,
-                target.status.value,
-                target.contact.model_dump_json(),
-                target.company.model_dump_json(),
-                target.score.model_dump_json() if target.score else None,
-                json.dumps([r.model_dump(mode="json") for r in target.outreach_history]),
-                target.notes,
-                json.dumps(target.tags),
-                json.dumps(target.raw_data),
-                target.created_at.isoformat(),
-                target.updated_at.isoformat(),
-                target.company.name,
-                target.contact.email,
-                target.score.total if target.score else None,
-            )
-
             try:
                 if existing_id:
                     await db.execute("""
@@ -379,23 +318,13 @@ class LeadDatabase:
                             outreach_json=?, notes=?, tags_json=?, updated_at=?,
                             score_total=?, company_name=?, contact_email=?
                         WHERE id=?
-                    """, (
-                        target.status.value, target.contact.model_dump_json(),
-                        target.company.model_dump_json(),
-                        target.score.model_dump_json() if target.score else None,
-                        json.dumps([r.model_dump(mode="json") for r in target.outreach_history]),
-                        target.notes, json.dumps(target.tags),
-                        target.updated_at.isoformat(),
-                        target.score.total if target.score else None,
-                        target.company.name, target.contact.email,
-                        existing_id,
-                    ))
+                    """, (*lead_update_values(target), existing_id))
                     await db.commit()
                     return False
                 else:
                     await db.execute("""
                         INSERT INTO leads VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    """, row)
+                    """, lead_insert_values(target))
                     await db.commit()
                     return True
             except sqlite3.IntegrityError as exc:
@@ -597,24 +526,5 @@ class LeadDatabase:
                 return {row[0]: row[1] for row in rows}
 
     def _row_to_lead(self, row) -> Lead:
-        """Convert a DB row tuple back to a Lead model."""
-        from leadgen.models import ContactInfo, CompanyInfo, OutreachRecord, ScoringBreakdown, LeadSource
-
-        (id_, source, status, contact_json, company_json, score_json,
-         outreach_json, notes, tags_json, raw_json, created_at, updated_at,
-         *_denorm) = row
-
-        return Lead(
-            id=id_,
-            source=LeadSource(source),
-            status=LeadStatus(status),
-            contact=ContactInfo(**json.loads(contact_json)),
-            company=CompanyInfo(**json.loads(company_json)),
-            score=ScoringBreakdown(**json.loads(score_json)) if score_json else None,
-            outreach_history=[OutreachRecord(**r) for r in json.loads(outreach_json)],
-            notes=notes,
-            tags=json.loads(tags_json),
-            raw_data=json.loads(raw_json),
-            created_at=parse_iso(created_at),
-            updated_at=parse_iso(updated_at),
-        )
+        """Convert a positional ``SELECT *`` row tuple back to a Lead model."""
+        return lead_from_row(row)

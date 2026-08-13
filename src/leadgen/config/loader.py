@@ -82,10 +82,34 @@ class ScoringConfig(BaseModel):
         return v
 
 
+DATABASE_BACKENDS = ("sqlite", "d1")
+
+
 class DatabaseConfig(BaseModel):
+    """Which lead store the engine talks to.
+
+    ``sqlite`` (the default) is the local file store used by dev and the
+    Claude Desktop stdio path. ``d1`` routes SQL over HTTP to the Cloudflare
+    Worker's D1 outbound handler and is only meaningful inside the container —
+    see :mod:`leadgen.crm.d1`. ``d1_url`` overrides the proxy endpoint; when
+    empty the adapter falls back to ``$LEADGEN_D1_URL`` and then to
+    ``http://db.internal/query``.
+    """
+
     backend: str = "sqlite"
     sqlite_path: str = "./data/leadgen.db"
+    d1_url: str = ""
     supabase_url: str = ""
+
+    @field_validator("backend")
+    @classmethod
+    def known_backend(cls, v: str) -> str:
+        backend = (v or "sqlite").strip().lower()
+        if backend not in DATABASE_BACKENDS:
+            raise ValueError(
+                f"database.backend must be one of {DATABASE_BACKENDS}, got {v!r}"
+            )
+        return backend
 
 
 class AIConfig(BaseModel):

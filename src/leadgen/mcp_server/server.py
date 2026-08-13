@@ -32,7 +32,8 @@ from leadgen._time import now_utc
 from leadgen.ai.drafter import OutreachDrafter
 from leadgen.ai.scorer import LeadScorer
 from leadgen.config.loader import display_agent_name, load_api_keys, load_config
-from leadgen.crm.database import EmailCollisionError, LeadDatabase
+from leadgen.crm.database import EmailCollisionError
+from leadgen.crm.factory import create_database
 from leadgen.models import INERT_STATUSES, LeadStatus
 
 logger = logging.getLogger(__name__)
@@ -1220,7 +1221,9 @@ async def main(
     # chdir into agents/<agent>/ before the engine reads `config.yaml`.
     config = load_config()
     keys = load_api_keys()
-    db = LeadDatabase(config.database.sqlite_path)
+    # Backend comes from config.database.backend and defaults to sqlite, so the
+    # Claude Desktop stdio path is unchanged.
+    db = create_database(config)
 
     logging.basicConfig(level=logging.INFO)
     agent_label = display_agent_name(config)
