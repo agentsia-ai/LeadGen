@@ -34,8 +34,12 @@ dependencies = [
     "aiosmtplib>=3.0.0",
     "sendgrid>=6.11.0",
 
-    # MCP server
-    "mcp>=1.0.0",
+    # MCP server. Capped below 2.0: the 2.x line restructures the very modules
+    # leadgen.mcp_server imports (mcp.server.Server, mcp.types), so an
+    # unconstrained resolve silently installs a package this code cannot run
+    # against. The floor is the oldest release the suite has actually been run
+    # on, not a feature requirement.
+    "mcp>=1.26,<2",
 
     # Config & env
     "pyyaml>=6.0.1",

@@ -1198,15 +1198,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-async def main(
+def configure(
     scorer_cls: type[LeadScorer] | None = None,
     drafter_cls: type[OutreachDrafter] | None = None,
 ) -> None:
-    """Start the MCP server.
+    """Bring the module to a ready state without starting a transport.
 
-    Optionally inject custom `LeadScorer` / `OutreachDrafter` subclasses for
-    use by productized agents (e.g. `RexScorer`, `RexDrafter`). Defaults
-    use the generic engine classes.
+    Installs the persona subclasses and loads config/keys/database into the
+    module globals the tool handlers read at call time. Split out of `main()`
+    so a non-stdio transport can reach the same state: the Cloudflare
+    Container wraps `app`'s request handlers in an HTTP server and never
+    opens a stdio loop, but still needs exactly this initialization.
     """
     global SCORER_CLASS, DRAFTER_CLASS, config, keys, db
     if scorer_cls is not None:
@@ -1224,6 +1226,19 @@ async def main(
     # Backend comes from config.database.backend and defaults to sqlite, so the
     # Claude Desktop stdio path is unchanged.
     db = create_database(config)
+
+
+async def main(
+    scorer_cls: type[LeadScorer] | None = None,
+    drafter_cls: type[OutreachDrafter] | None = None,
+) -> None:
+    """Start the MCP server on stdio.
+
+    Optionally inject custom `LeadScorer` / `OutreachDrafter` subclasses for
+    use by productized agents (e.g. `RexScorer`, `RexDrafter`). Defaults
+    use the generic engine classes.
+    """
+    configure(scorer_cls=scorer_cls, drafter_cls=drafter_cls)
 
     logging.basicConfig(level=logging.INFO)
     agent_label = display_agent_name(config)
