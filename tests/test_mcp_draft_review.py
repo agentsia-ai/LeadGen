@@ -107,6 +107,33 @@ async def test_send_test_draft_delivers_without_mutating_lead(
 
 
 @pytest.mark.asyncio
+async def test_approve_outreach_marks_all_pending_unapproved_records(
+    mcp_env, scored_lead,
+) -> None:
+    """After supersede there should be one pending draft; approve marks it."""
+    pending = OutreachRecord(subject="draft a", body="body a", sequence_step=0)
+    already_approved = OutreachRecord(
+        subject="already approved",
+        body="body b",
+        sequence_step=1,
+        approved_at=now_utc(),
+    )
+    scored_lead.outreach_history = [pending, already_approved]
+    scored_lead.status = LeadStatus.QUEUED
+    await mcp_env.upsert(scored_lead)
+
+    result = await mcp_server.call_tool(
+        "approve_outreach", {"lead_id": scored_lead.id}
+    )
+    payload = json.loads(result[0].text)
+
+    assert payload["approved"] == 1
+    stored = await mcp_env.get(scored_lead.id)
+    assert stored.outreach_history[0].approved_at is not None
+    assert stored.outreach_history[1].approved_at is not None
+
+
+@pytest.mark.asyncio
 async def test_send_outreach_requires_lead_id(mcp_env) -> None:
     result = await mcp_server.call_tool("send_outreach", {})
     payload = json.loads(result[0].text)
