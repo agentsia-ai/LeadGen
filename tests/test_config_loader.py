@@ -8,7 +8,7 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from leadgen.config.loader import APIKeys, ScoringConfig, load_api_keys, load_config
+from leadgen.config.loader import APIKeys, IndustryRefinementsConfig, ScoringConfig, load_api_keys, load_config
 
 
 def _minimal_config_dict() -> dict:
@@ -59,6 +59,30 @@ def test_load_config_flattens_top_level_scoring_threshold(tmp_path: Path) -> Non
 
     cfg = load_config(cfg_path)
     assert cfg.scoring.threshold == 0.42
+
+
+def test_load_config_reads_industry_refinements(tmp_path: Path) -> None:
+    """icp.industry_refinements must survive YAML load — Rex uses this for PDL."""
+    cfg_dict = _minimal_config_dict()
+    cfg_dict["icp"] = {
+        "industry_refinements": {
+            "fields": ["job_company_name", "job_title"],
+            "keywords": ["closing attorney", "title attorney"],
+        }
+    }
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg_dict), encoding="utf-8")
+
+    cfg = load_config(cfg_path)
+    assert cfg.icp.industry_refinements is not None
+    assert cfg.icp.industry_refinements.fields == [
+        "job_company_name",
+        "job_title",
+    ]
+    assert cfg.icp.industry_refinements.keywords == [
+        "closing attorney",
+        "title attorney",
+    ]
 
 
 def test_api_keys_from_env(monkeypatch: pytest.MonkeyPatch) -> None:

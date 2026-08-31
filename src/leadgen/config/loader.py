@@ -23,6 +23,17 @@ load_dotenv(override=False)
 
 # ── Pydantic models for config validation ────────────────────────────────────
 
+class IndustryRefinementsConfig(BaseModel):
+    """Optional PDL keyword narrowing for coarse industry buckets.
+
+    OR-match semantics: any keyword hit on any configured field satisfies the
+    clause. Applied server-side via PDLConnector (see pdl.py).
+    """
+
+    fields: list[str] = Field(default_factory=lambda: ["job_company_name", "job_title"])
+    keywords: list[str] = []
+
+
 class ICPConfig(BaseModel):
     industries: list[str] = []
     company_size: dict[str, int] = {"min_employees": 1, "max_employees": 10000}
@@ -31,6 +42,7 @@ class ICPConfig(BaseModel):
     pain_points: list[str] = []
     positive_signals: list[str] = []
     negative_signals: list[str] = []
+    industry_refinements: IndustryRefinementsConfig | None = None
 
 
 class ValuePropConfig(BaseModel):
