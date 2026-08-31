@@ -821,6 +821,64 @@ def test_pdl_normalizes_boolean_email_to_none(test_config, test_keys) -> None:
     assert lead.contact.email is None
 
 
+def test_pdl_normalizes_boolean_phone_numbers_to_none(test_config, test_keys) -> None:
+    """Free tier may return phone_numbers=True (existence flag, not a list)."""
+    p = PDLConnector(test_config, test_keys)
+    lead = p._parse_person(
+        {
+            "first_name": "X",
+            "last_name": "Y",
+            "full_name": "X Y",
+            "job_company_name": "BoolCo",
+            "work_email": "x@boolco.com",
+            "phone_numbers": True,
+        }
+    )
+    assert lead.contact.phone is None
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_pdl_search_handles_boolean_phone_numbers_in_batch(
+    test_config, test_keys
+) -> None:
+    """Batch pulls must survive a later record with phone_numbers=True."""
+    respx.get("https://api.peopledatalabs.com/v5/person/search").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "first_name": "Alice",
+                        "last_name": "One",
+                        "full_name": "Alice One",
+                        "work_email": "alice@firmone.com",
+                        "job_company_name": "firm one",
+                        "job_company_industry": "legal services",
+                    },
+                    {
+                        "first_name": "Bob",
+                        "last_name": "Two",
+                        "full_name": "Bob Two",
+                        "work_email": "bob@firmtwo.com",
+                        "job_company_name": "firm two",
+                        "job_company_industry": "legal services",
+                        "phone_numbers": True,
+                    },
+                ],
+                "scroll_token": None,
+            },
+        )
+    )
+
+    async with PDLConnector(test_config, test_keys) as p:
+        leads = await p.search(limit=2)
+
+    assert len(leads) == 2
+    assert leads[0].contact.phone is None
+    assert leads[1].contact.phone is None
+
+
 # ═══════════════════════ Maps (stub) ═════════════════════════════════════════
 
 

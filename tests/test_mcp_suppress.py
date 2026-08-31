@@ -183,3 +183,31 @@ async def test_suppressed_lead_skipped_on_re_fetch(
 
     blocked, _ = await check_lead_suppressed(mcp_env, refetch)
     assert blocked is False
+
+
+@pytest.mark.asyncio
+async def test_fetch_new_leads_returns_traceback_on_failure(mcp_env, monkeypatch) -> None:
+    class BoomPDL:
+        def __init__(self, config, keys):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def search(self, **kwargs):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr("leadgen.sources.pdl.PDLConnector", BoomPDL)
+
+    result = await mcp_server.call_tool(
+        "fetch_new_leads",
+        {"source": "pdl", "limit": 5},
+    )
+    payload = json.loads(result[0].text)
+
+    assert payload["error"] == "boom"
+    assert "traceback" in payload
+    assert "RuntimeError: boom" in payload["traceback"]
