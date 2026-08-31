@@ -17,11 +17,16 @@ import httpx
 import pytest
 import respx
 
+from leadgen.config.loader import IndustryRefinementsConfig
 from leadgen.models import LeadSource
 from leadgen.sources.apollo import ApolloConnector
 from leadgen.sources.hunter import HunterConnector
 from leadgen.sources.maps import MapsConnector
-from leadgen.sources.pdl import PDLConnector
+from leadgen.sources.pdl import (
+    PDLConnector,
+    build_industry_refinement_filters,
+    merge_extra_filters,
+)
 
 
 # ═══════════════════════ Hunter ═══════════════════════════════════════════════
@@ -614,6 +619,56 @@ def test_pdl_parses_null_employee_count_as_unknown(test_config, test_keys) -> No
     )
     assert lead.company.employee_count is None
     assert lead.company.employee_count_unknown is True
+
+
+def test_pdl_industry_refinements_build_or_match_filters() -> None:
+    """Each keyword × field becomes a match_phrase should clause."""
+    filt = build_industry_refinement_filters(
+        IndustryRefinementsConfig(
+            fields=["job_company_name", "job_title"],
+            keywords=["closing attorney", "title attorney"],
+        )
+    )
+    assert filt is not None
+    should = filt["must"][0]["bool"]["should"]
+    assert len(should) == 4
+    assert should[0] == {"match_phrase": {"job_company_name": "closing attorney"}}
+    assert should[1] == {"match_phrase": {"job_title": "closing attorney"}}
+    assert should[2] == {"match_phrase": {"job_company_name": "title attorney"}}
+    assert should[3] == {"match_phrase": {"job_title": "title attorney"}}
+
+
+def test_pdl_build_es_query_includes_industry_refinements(test_config, test_keys) -> None:
+    """Configured industry_refinements are merged into the ES query must stack."""
+    test_config.icp.industry_refinements = IndustryRefinementsConfig(
+        fields=["job_company_name", "job_title"],
+        keywords=["closing attorney"],
+    )
+    p = PDLConnector(test_config, test_keys)
+    payload = p._build_es_query(
+        extra_filters=build_industry_refinement_filters(
+            test_config.icp.industry_refinements
+        )
+    )
+    must = payload["query"]["bool"]["must"]
+    refinement_clause = next(
+        c
+        for c in must
+        if "bool" in c
+        and any("match_phrase" in s for s in c["bool"].get("should", []))
+    )
+    should = refinement_clause["bool"]["should"]
+    assert should == [
+        {"match_phrase": {"job_company_name": "closing attorney"}},
+        {"match_phrase": {"job_title": "closing attorney"}},
+    ]
+
+
+def test_merge_extra_filters_concatenates_must_clauses() -> None:
+    a = {"must": [{"term": {"a": 1}}]}
+    b = {"must": [{"term": {"b": 2}}]}
+    merged = merge_extra_filters(a, b)
+    assert merged == {"must": [{"term": {"a": 1}}, {"term": {"b": 2}}]}
 
 
 def _pdl_size_clause_matches(

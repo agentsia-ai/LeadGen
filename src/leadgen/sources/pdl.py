@@ -13,7 +13,7 @@ from typing import Any
 import httpx
 from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_exponential
 
-from leadgen.config.loader import APIKeys, LeadGenConfig
+from leadgen.config.loader import APIKeys, IndustryRefinementsConfig, LeadGenConfig
 from leadgen.models import CompanyInfo, ContactInfo, Lead, LeadSource, split_company_names
 from leadgen.sources.pdl_industries import BROADER_THAN_LABEL, validate_and_resolve
 from leadgen.text import normalize_company_display_name
@@ -45,6 +45,54 @@ def _pdl_error_detail(response: httpx.Response) -> str:
 
 # PDL uses lowercase for location/industry values
 COUNTRY_ALIASES = {"us": "united states", "usa": "united states", "uk": "united kingdom"}
+
+# PDL Person Search only exposes these as keyword-refinement targets today.
+_INDUSTRY_REFINEMENT_FIELDS = frozenset({"job_company_name", "job_title"})
+
+
+def build_industry_refinement_filters(
+    refinements: IndustryRefinementsConfig | None,
+) -> dict[str, list[dict]] | None:
+    """Build PDL extra_filters from icp.industry_refinements.
+
+    Each keyword is checked against each configured field; any single match
+    satisfies the clause (bool.should OR). Keywords are lowercased to match
+    PDL's normalized job_company_name / job_title values.
+    """
+    if refinements is None or not refinements.keywords:
+        return None
+
+    fields = [
+        f.strip()
+        for f in (refinements.fields or ["job_company_name", "job_title"])
+        if f.strip() in _INDUSTRY_REFINEMENT_FIELDS
+    ]
+    if not fields:
+        return None
+
+    should: list[dict] = []
+    for keyword in refinements.keywords:
+        kw = keyword.strip().lower()
+        if not kw:
+            continue
+        for field in fields:
+            should.append({"match_phrase": {field: kw}})
+
+    if not should:
+        return None
+
+    return {"must": [{"bool": {"should": should}}]}
+
+
+def merge_extra_filters(
+    *filters: dict[str, list[dict]] | None,
+) -> dict[str, list[dict]] | None:
+    """Merge extra_filters dicts by concatenating their must clauses."""
+    must: list[dict] = []
+    for filt in filters:
+        if filt:
+            must.extend(filt.get("must", []))
+    return {"must": must} if must else None
 
 
 class PDLConnector:
@@ -264,12 +312,17 @@ class PDLConnector:
         size = min(limit, 100)
         scroll_token: str | None = None
 
+        merged_extra_filters = merge_extra_filters(
+            build_industry_refinement_filters(self.config.icp.industry_refinements),
+            extra_filters,
+        )
+
         skip_industry = False  # Only set True by an explicit opt-in relaxation
         while len(leads) < limit:
             payload = self._build_es_query(
                 size=min(size, limit - len(leads)),
                 scroll_token=scroll_token,
-                extra_filters=extra_filters,
+                extra_filters=merged_extra_filters,
                 skip_industry=skip_industry,
             )
             logger.info(

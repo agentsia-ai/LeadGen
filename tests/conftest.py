@@ -19,6 +19,7 @@ from leadgen.config.loader import (
     APIKeys,
     DatabaseConfig,
     ICPConfig,
+    IndustryRefinementsConfig,
     LeadGenConfig,
     OutreachConfig,
     ScoringConfig,
