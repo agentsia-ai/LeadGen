@@ -400,10 +400,18 @@ class PDLConnector:
                 logger.info("No more results from PDL.")
                 break
 
-            for person in records:
-                lead = self._parse_person(person)
-                await self._attach_company_display_name(lead, person)
-                leads.append(lead)
+            for record_index, person in enumerate(records, start=1):
+                try:
+                    lead = self._parse_person(person)
+                    await self._attach_company_display_name(lead, person)
+                    leads.append(lead)
+                except Exception:
+                    logger.exception(
+                        "Failed parsing PDL person record %d/%d",
+                        record_index,
+                        len(records),
+                    )
+                    raise
                 if len(leads) >= limit:
                     break
 
@@ -426,8 +434,12 @@ class PDLConnector:
         return val if isinstance(val, str) else None
 
     def _first_phone(self, phones: list | None) -> str | None:
-        """Extract first phone from PDL phone_numbers (list of strings or dicts)."""
-        if not phones:
+        """Extract first phone from PDL phone_numbers (list of strings or dicts).
+
+        Free tier may return ``True`` in the phone_numbers slot (same as emails)
+        to signal existence without revealing the value — treat non-lists as absent.
+        """
+        if not isinstance(phones, list) or not phones:
             return None
         first = phones[0]
         return first.get("number", first) if isinstance(first, dict) else first

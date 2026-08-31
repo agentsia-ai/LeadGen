@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import traceback
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -535,73 +536,83 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         use_hunter = src == "hunter" or (src is None and domain)
         use_pdl = src == "pdl"
 
-        if use_hunter:
-            if not domain:
-                return [TextContent(type="text", text=json.dumps({"error": "Hunter requires domain parameter"}))]
-            if not keys.hunter:
-                return [TextContent(type="text", text=json.dumps({"error": "HUNTER_API_KEY is not set. Provide it as an environment variable (set it in Doppler for production, or a local .env for development)."}))]
-            async with HunterConnector(config, keys) as hunter:
-                leads = await hunter.domain_search(domain=domain, limit=limit)
-        elif use_pdl:
-            if not keys.pdl:
-                return [TextContent(type="text", text=json.dumps({"error": "PDL_API_KEY is not set. Provide it as an environment variable (set it in Doppler for production, or a local .env for development)."}))]
-            async with PDLConnector(config, keys) as pdl:
-                leads = await pdl.search(
-                    limit=limit, relax_industry=arguments.get("relax_industry", False)
-                )
-        else:
-            if not keys.apollo:
-                return [TextContent(type="text", text=json.dumps({"error": "APOLLO_API_KEY is not set. Provide it as an environment variable (set it in Doppler for production, or a local .env for development)."}))]
-            async with ApolloConnector(config, keys) as apollo:
-                leads = await apollo.search(limit=limit)
+        try:
+            if use_hunter:
+                if not domain:
+                    return [TextContent(type="text", text=json.dumps({"error": "Hunter requires domain parameter"}))]
+                if not keys.hunter:
+                    return [TextContent(type="text", text=json.dumps({"error": "HUNTER_API_KEY is not set. Provide it as an environment variable (set it in Doppler for production, or a local .env for development)."}))]
+                async with HunterConnector(config, keys) as hunter:
+                    leads = await hunter.domain_search(domain=domain, limit=limit)
+            elif use_pdl:
+                if not keys.pdl:
+                    return [TextContent(type="text", text=json.dumps({"error": "PDL_API_KEY is not set. Provide it as an environment variable (set it in Doppler for production, or a local .env for development)."}))]
+                async with PDLConnector(config, keys) as pdl:
+                    leads = await pdl.search(
+                        limit=limit, relax_industry=arguments.get("relax_industry", False)
+                    )
+            else:
+                if not keys.apollo:
+                    return [TextContent(type="text", text=json.dumps({"error": "APOLLO_API_KEY is not set. Provide it as an environment variable (set it in Doppler for production, or a local .env for development)."}))]
+                async with ApolloConnector(config, keys) as apollo:
+                    leads = await apollo.search(limit=limit)
 
-        added = 0
-        suppressed = 0
-        from leadgen.crm.suppression import check_lead_suppressed
+            added = 0
+            suppressed = 0
+            from leadgen.crm.suppression import check_lead_suppressed
 
-        for lead in leads:
-            is_blocked, _reason = await check_lead_suppressed(db, lead)
-            if is_blocked:
-                suppressed += 1
-                continue
-            is_new = await db.upsert(lead, dedupe_on_identity=True)
-            if is_new:
-                added += 1
+            for lead in leads:
+                is_blocked, _reason = await check_lead_suppressed(db, lead)
+                if is_blocked:
+                    suppressed += 1
+                    continue
+                is_new = await db.upsert(lead, dedupe_on_identity=True)
+                if is_new:
+                    added += 1
 
-        # Echo back a preview of the records THIS call actually fetched so the
-        # result can be verified at a glance — without having to re-query the
-        # DB (where older, higher-scored leads sort to the top and can be
-        # mistaken for the fresh pull).
-        preview = [
-            {
-                "name": lead.display_name,
-                "company": lead.company.name,
-                "title": lead.contact.title,
-                "industry": lead.company.industry,
-                "industry_relaxed": lead.industry_relaxed,
-                "location": ", ".join(p for p in (lead.company.city, lead.company.state) if p) or None,
-                "email": lead.contact.email,
-                "email_verified": lead.contact.email_verified,
-                "source": lead.source.value,
-                "employee_count": (
-                    lead.company.employee_count
-                    if not lead.company.employee_count_unknown
-                    else "unknown"
-                ),
-            }
-            for lead in leads
-        ]
+            # Echo back a preview of the records THIS call actually fetched so the
+            # result can be verified at a glance — without having to re-query the
+            # DB (where older, higher-scored leads sort to the top and can be
+            # mistaken for the fresh pull).
+            preview = [
+                {
+                    "name": lead.display_name,
+                    "company": lead.company.name,
+                    "title": lead.contact.title,
+                    "industry": lead.company.industry,
+                    "industry_relaxed": lead.industry_relaxed,
+                    "location": ", ".join(p for p in (lead.company.city, lead.company.state) if p) or None,
+                    "email": lead.contact.email,
+                    "email_verified": lead.contact.email_verified,
+                    "source": lead.source.value,
+                    "employee_count": (
+                        lead.company.employee_count
+                        if not lead.company.employee_count_unknown
+                        else "unknown"
+                    ),
+                }
+                for lead in leads
+            ]
 
-        return [TextContent(
-            type="text",
-            text=json.dumps({
-                "source": src or ("hunter" if domain else "apollo"),
-                "fetched": len(leads),
-                "new_leads_added": added,
-                "suppressed_skipped": suppressed,
-                "preview": preview,
-            }, indent=2)
-        )]
+            return [TextContent(
+                type="text",
+                text=json.dumps({
+                    "source": src or ("hunter" if domain else "apollo"),
+                    "fetched": len(leads),
+                    "new_leads_added": added,
+                    "suppressed_skipped": suppressed,
+                    "preview": preview,
+                }, indent=2)
+            )]
+        except Exception as exc:
+            logger.exception("fetch_new_leads failed")
+            return [TextContent(
+                type="text",
+                text=json.dumps({
+                    "error": str(exc),
+                    "traceback": traceback.format_exc(),
+                }, indent=2),
+            )]
 
     elif name == "enrich_lead":
         from leadgen.sources.hunter import HunterConnector
